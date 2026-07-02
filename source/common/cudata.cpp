@@ -493,23 +493,74 @@ void CUData::copyToPic(uint32_t depth) const
 {
     CUData& ctu = *m_encData->getPicCTU(m_cuAddr);
 
-    m_partCopy((uint8_t*)ctu.m_qp + m_absIdxInCTU, (uint8_t*)m_qp);
-    m_partCopy((uint8_t*)ctu.m_qpAnalysis + m_absIdxInCTU, (uint8_t*)m_qpAnalysis);
-    m_partCopy(ctu.m_log2CUSize + m_absIdxInCTU, m_log2CUSize);
-    m_partCopy(ctu.m_lumaIntraDir + m_absIdxInCTU, m_lumaIntraDir);
-    m_partCopy(ctu.m_tqBypass + m_absIdxInCTU, m_tqBypass);
-    m_partCopy((uint8_t*)ctu.m_refIdx[0] + m_absIdxInCTU, (uint8_t*)m_refIdx[0]);
-    m_partCopy((uint8_t*)ctu.m_refIdx[1] + m_absIdxInCTU, (uint8_t*)m_refIdx[1]);
-    m_partCopy(ctu.m_cuDepth + m_absIdxInCTU, m_cuDepth);
-    m_partCopy(ctu.m_predMode + m_absIdxInCTU, m_predMode);
-    m_partCopy(ctu.m_partSize + m_absIdxInCTU, m_partSize);
-    m_partCopy(ctu.m_mergeFlag + m_absIdxInCTU, m_mergeFlag);
-    m_partCopy(ctu.m_interDir + m_absIdxInCTU, m_interDir);
-    m_partCopy(ctu.m_mvpIdx[0] + m_absIdxInCTU, m_mvpIdx[0]);
-    m_partCopy(ctu.m_mvpIdx[1] + m_absIdxInCTU, m_mvpIdx[1]);
-    m_partCopy(ctu.m_tuDepth + m_absIdxInCTU, m_tuDepth);
-    m_partCopy(ctu.m_transformSkip[0] + m_absIdxInCTU, m_transformSkip[0]);
-    m_partCopy(ctu.m_cbf[0] + m_absIdxInCTU, m_cbf[0]);
+    /* Phase 6 (2026-07-02): at a full-CTU commit (m_absIdxInCTU == 0 and the
+     * source has the same partition count as the target), the ~22 per-field
+     * copy16/copy4 calls in the original body all hit contiguous regions of
+     * the char-mem block (see CUData::initialize field layout).  Replace them
+     * with two contiguous memcpys that straddle the m_skipFlag[0/1] slots we
+     * intentionally DO NOT overwrite (skipFlag is populated separately by the
+     * --analysis-load path at analysis.cpp:293; preserving those bytes keeps
+     * that feature working).
+     *
+     * ONLY fires when the analysis Mode's CUData has the same layout as the
+     * frame's picture CTU CUData — same numPartitions and same csp.  Falls
+     * back to the field-by-field path for sub-CU commits (m_absIdxInCTU != 0
+     * or partition-count mismatch). */
+    if (m_absIdxInCTU == 0 && m_numPartitions == ctu.m_numPartitions &&
+        m_chromaFormat == ctu.m_chromaFormat)
+    {
+        const uint32_t np = m_numPartitions;
+        /* Layout for CSP != I400 (24 fields):
+         *   0 m_qp             1 m_qpAnalysis      2 m_log2CUSize
+         *   3 m_lumaIntraDir   4 m_tqBypass        5 m_refIdx[0]
+         *   6 m_refIdx[1]      7 m_cuDepth         8 m_predMode
+         *   9 m_partSize      10 m_skipFlag[0]    11 m_skipFlag[1]      <-- SKIP
+         *  12 m_mergeFlag     13 m_interDir       14 m_mvpIdx[0]
+         *  15 m_mvpIdx[1]     16 m_tuDepth        17 m_transformSkip[0]
+         *  18 m_transformSkip[1] 19 m_transformSkip[2] 20 m_cbf[0]
+         *  21 m_cbf[1]        22 m_cbf[2]         23 m_chromaIntraDir
+         * Layout for CSP == I400 (20 fields, no chroma slots):
+         *   ... same 0..9 ...  10 m_skipFlag[0]    11 m_skipFlag[1]      <-- SKIP
+         *  12 m_mergeFlag     13 m_interDir       14 m_mvpIdx[0]
+         *  15 m_mvpIdx[1]     16 m_tuDepth        17 m_transformSkip[0]
+         *  18 m_cbf[0]        19 m_chromaIntraDir (redundant but present)
+         *
+         * Copy 0..9 (10 fields), skip 10..11, copy 12..end. */
+        memcpy((uint8_t*)ctu.m_qp,        (uint8_t*)m_qp,        10 * np);
+        /* m_skipFlag stays untouched */
+        const int trailing = (ctu.m_chromaFormat == X265_CSP_I400)
+                             ? (BytesPerPartition - 4) - 12
+                             :  BytesPerPartition - 12;
+        memcpy(ctu.m_mergeFlag, m_mergeFlag, trailing * np);
+    }
+    else
+    {
+        m_partCopy((uint8_t*)ctu.m_qp + m_absIdxInCTU, (uint8_t*)m_qp);
+        m_partCopy((uint8_t*)ctu.m_qpAnalysis + m_absIdxInCTU, (uint8_t*)m_qpAnalysis);
+        m_partCopy(ctu.m_log2CUSize + m_absIdxInCTU, m_log2CUSize);
+        m_partCopy(ctu.m_lumaIntraDir + m_absIdxInCTU, m_lumaIntraDir);
+        m_partCopy(ctu.m_tqBypass + m_absIdxInCTU, m_tqBypass);
+        m_partCopy((uint8_t*)ctu.m_refIdx[0] + m_absIdxInCTU, (uint8_t*)m_refIdx[0]);
+        m_partCopy((uint8_t*)ctu.m_refIdx[1] + m_absIdxInCTU, (uint8_t*)m_refIdx[1]);
+        m_partCopy(ctu.m_cuDepth + m_absIdxInCTU, m_cuDepth);
+        m_partCopy(ctu.m_predMode + m_absIdxInCTU, m_predMode);
+        m_partCopy(ctu.m_partSize + m_absIdxInCTU, m_partSize);
+        m_partCopy(ctu.m_mergeFlag + m_absIdxInCTU, m_mergeFlag);
+        m_partCopy(ctu.m_interDir + m_absIdxInCTU, m_interDir);
+        m_partCopy(ctu.m_mvpIdx[0] + m_absIdxInCTU, m_mvpIdx[0]);
+        m_partCopy(ctu.m_mvpIdx[1] + m_absIdxInCTU, m_mvpIdx[1]);
+        m_partCopy(ctu.m_tuDepth + m_absIdxInCTU, m_tuDepth);
+        m_partCopy(ctu.m_transformSkip[0] + m_absIdxInCTU, m_transformSkip[0]);
+        m_partCopy(ctu.m_cbf[0] + m_absIdxInCTU, m_cbf[0]);
+        if (ctu.m_chromaFormat != X265_CSP_I400)
+        {
+            m_partCopy(ctu.m_transformSkip[1] + m_absIdxInCTU, m_transformSkip[1]);
+            m_partCopy(ctu.m_transformSkip[2] + m_absIdxInCTU, m_transformSkip[2]);
+            m_partCopy(ctu.m_cbf[1] + m_absIdxInCTU, m_cbf[1]);
+            m_partCopy(ctu.m_cbf[2] + m_absIdxInCTU, m_cbf[2]);
+            m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
+        }
+    }
 
     memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
     memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
@@ -524,12 +575,6 @@ void CUData::copyToPic(uint32_t depth) const
 
     if (ctu.m_chromaFormat != X265_CSP_I400)
     {
-        m_partCopy(ctu.m_transformSkip[1] + m_absIdxInCTU, m_transformSkip[1]);
-        m_partCopy(ctu.m_transformSkip[2] + m_absIdxInCTU, m_transformSkip[2]);
-        m_partCopy(ctu.m_cbf[1] + m_absIdxInCTU, m_cbf[1]);
-        m_partCopy(ctu.m_cbf[2] + m_absIdxInCTU, m_cbf[2]);
-        m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
-
         uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
         uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
         memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
