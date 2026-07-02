@@ -562,23 +562,45 @@ void CUData::copyToPic(uint32_t depth) const
         }
     }
 
-    memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
-    memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
-    memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
-    memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
+    /* Phase 6b (2026-07-02): m_mv[0..1] + m_mvd[0..1] are laid out contiguously
+     * in the shared mvMemBlock (see CUData::initialize) — at a full-CTU commit
+     * with matching np, fold the four memcpys into one. */
+    if (m_absIdxInCTU == 0 && m_numPartitions == ctu.m_numPartitions)
+    {
+        memcpy(ctu.m_mv[0], m_mv[0], 4 * m_numPartitions * sizeof(MV));
+    }
+    else
+    {
+        memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
+        memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
+        memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
+        memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
+    }
 
     memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
 
     uint32_t tmpY = 1 << ((m_slice->m_param->maxLog2CUSize - depth) * 2);
     uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);
-    memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
 
-    if (ctu.m_chromaFormat != X265_CSP_I400)
+    /* Phase 6b: coeff planes are contiguous in trCoeffMemBlock at offsets 0
+     * (Y), sizeL (Cb), sizeL+sizeC (Cr).  At a full-CTU commit the three
+     * separate memcpys collapse to one. */
+    if (m_absIdxInCTU == 0 && ctu.m_chromaFormat != X265_CSP_I400 &&
+        m_hChromaShift == ctu.m_hChromaShift && m_vChromaShift == ctu.m_vChromaShift)
     {
         uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
-        uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
-        memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
-        memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
+        memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
+    }
+    else
+    {
+        memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
+        if (ctu.m_chromaFormat != X265_CSP_I400)
+        {
+            uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
+            uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
+            memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
+            memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
+        }
     }
 }
 
