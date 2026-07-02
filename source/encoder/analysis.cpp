@@ -111,8 +111,34 @@ bool Analysis::create(ThreadLocalData *tld)
             for (int j = 0; j < MAX_PRED_TYPES; j++)
             {
                 md.pred[j].cu.initialize(md.cuMemPool, depth, *m_param, j);
-                ok &= md.pred[j].predYuv.create(cuSize, csp);
-                ok &= md.pred[j].reconYuv.create(cuSize, csp);
+
+                /* Phase 5 slice (2026-07-02): skip predYuv/reconYuv allocation
+                 * for Mode slots whose entire code path is gated off by the
+                 * current encoder configuration.  cu.initialize stays because
+                 * some code (e.g. compressInterCU_dist:1129) touches cu
+                 * unconditionally, but predYuv/reconYuv are only touched inside
+                 * the corresponding gate.  Yuv default-constructed state has
+                 * m_ownedBuf=NULL, so destroy() is a no-op — no leak.
+                 *
+                 * If a gated code path accidentally fires the crash is a
+                 * NULL-deref inside a primitive call — visible immediately,
+                 * not a silent quality regression. */
+                const bool skipModeYuv =
+                    /* PRED_LOSSLESS: only tryLossless() reads it, guarded by m_bTryLossless. */
+                    (j == PRED_LOSSLESS && !m_bTryLossless)
+                    /* PRED_BIDIR: only touched under B_SLICE / PMODE paths, off with --bframes 0. */
+                 || (j == PRED_BIDIR && !m_param->bframes)
+                    /* Rect inter Nx2N / 2NxN: gated by --rect (bEnableRectInter). */
+                 || ((j == PRED_Nx2N || j == PRED_2NxN) && !m_param->bEnableRectInter)
+                    /* AMP partitions: gated by --amp (bEnableAMP). */
+                 || ((j == PRED_2NxnU || j == PRED_2NxnD ||
+                      j == PRED_nLx2N || j == PRED_nRx2N) && !m_param->bEnableAMP);
+
+                if (!skipModeYuv)
+                {
+                    ok &= md.pred[j].predYuv.create(cuSize, csp);
+                    ok &= md.pred[j].reconYuv.create(cuSize, csp);
+                }
                 md.pred[j].fencYuv = &md.fencYuv;
             }
         }
