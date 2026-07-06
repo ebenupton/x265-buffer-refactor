@@ -1,0 +1,2 @@
+# These .so artifacts are intentionally checked in (BOLT distribution).
+!*.so.*
