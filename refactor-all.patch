@@ -1,0 +1,1541 @@
+--- a/source/common/aarch64/asm-primitives.cpp
++++ b/source/common/aarch64/asm-primitives.cpp
+@@ -582,7 +582,8 @@
+     p.cu[BLOCK_32x32].var = PFX(pixel_var_32x32_neon);
+     p.cu[BLOCK_64x64].var = PFX(pixel_var_64x64_neon);
+ 
+-    // calc_Residual
++    /* Memory-refactor 2026-07-01: calcresidual .S variants updated to the
++     * 3-stride signature (fenc/pred/resi). Re-registered. */
+     p.cu[BLOCK_4x4].calcresidual[NONALIGNED]   = PFX(getResidual4_neon);
+     p.cu[BLOCK_8x8].calcresidual[NONALIGNED]   = PFX(getResidual8_neon);
+     p.cu[BLOCK_16x16].calcresidual[NONALIGNED] = PFX(getResidual16_neon);
+@@ -900,7 +901,7 @@
+     p.cu[BLOCK_32x32].var = PFX(pixel_var_32x32_sve2);
+     p.cu[BLOCK_64x64].var = PFX(pixel_var_64x64_sve2);
+ 
+-    // calc_Residual
++    /* Memory-refactor 2026-07-01: SVE2 calcresidual .S updated to 3-stride sig. */
+     p.cu[BLOCK_16x16].calcresidual[NONALIGNED] = PFX(getResidual16_sve2);
+     p.cu[BLOCK_32x32].calcresidual[NONALIGNED] = PFX(getResidual32_sve2);
+ 
+--- a/source/common/aarch64/fun-decls.h
++++ b/source/common/aarch64/fun-decls.h
+@@ -169,10 +169,10 @@
+ uint64_t PFX(pixel_var_32x32_neon(const pixel* pix, intptr_t stride));
+ uint64_t PFX(pixel_var_64x64_neon(const pixel* pix, intptr_t stride));
+ 
+-void PFX(getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
+-void PFX(getResidual8_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
+-void PFX(getResidual16_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
+-void PFX(getResidual32_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
++void PFX(getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
++void PFX(getResidual8_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
++void PFX(getResidual16_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
++void PFX(getResidual32_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
+ 
+ void PFX(scale1D_128to64_neon(pixel *dst, const pixel *src));
+ void PFX(scale2D_64to32_neon(pixel* dst, const pixel* src, intptr_t stride));
+@@ -238,8 +238,8 @@
+ uint64_t PFX(pixel_var_32x32_sve2(const pixel* pix, intptr_t stride));
+ uint64_t PFX(pixel_var_64x64_sve2(const pixel* pix, intptr_t stride));
+ 
+-void PFX(getResidual16_sve2(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
+-void PFX(getResidual32_sve2(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride));
++void PFX(getResidual16_sve2(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
++void PFX(getResidual32_sve2(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t fencStride, intptr_t predStride, intptr_t resiStride));
+ 
+ void PFX(scale1D_128to64_sve2(pixel *dst, const pixel *src));
+ void PFX(scale2D_64to32_sve2(pixel* dst, const pixel* src, intptr_t stride));
+--- a/source/common/aarch64/pixel-prim.cpp
++++ b/source/common/aarch64/pixel-prim.cpp
+@@ -1482,7 +1482,8 @@
+ }
+ 
+ template<int blockSize>
+-void getResidual_neon(const pixel *fenc, const pixel *pred, int16_t *residual, intptr_t stride)
++void getResidual_neon(const pixel *fenc, const pixel *pred, int16_t *residual,
++                      intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
+ {
+     for (int y = 0; y < blockSize; y++)
+     {
+@@ -1504,9 +1505,9 @@
+         {
+             residual[x] = static_cast<int16_t>(fenc[x]) - static_cast<int16_t>(pred[x]);
+         }
+-        fenc += stride;
+-        residual += stride;
+-        pred += stride;
++        fenc     += fencStride;
++        pred     += predStride;
++        residual += resiStride;
+     }
+ }
+ 
+--- a/source/common/aarch64/pixel-util.S
++++ b/source/common/aarch64/pixel-util.S
+@@ -97,64 +97,66 @@
+     ret
+ endfunc
+ 
+-// void getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride)
++// void getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual,
++//                        intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
++//   x0=fenc, x1=pred, x2=residual, x3=fencStride, x4=predStride, x5=resiStride (int16_t units)
+ function PFX(getResidual4_neon)
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1                // x6 = resiStride in bytes
+ .rept 2
+     ld1             {v0.8b}, [x0], x3
+-    ld1             {v1.8b}, [x1], x3
++    ld1             {v1.8b}, [x1], x4
+     ld1             {v2.8b}, [x0], x3
+-    ld1             {v3.8b}, [x1], x3
++    ld1             {v3.8b}, [x1], x4
+     usubl           v4.8h, v0.8b, v1.8b
+     usubl           v5.8h, v2.8b, v3.8b
+-    st1             {v4.8b}, [x2], x4
+-    st1             {v5.8b}, [x2], x4
++    st1             {v4.8b}, [x2], x6
++    st1             {v5.8b}, [x2], x6
+ .endr
+     ret
+ endfunc
+ 
+ function PFX(getResidual8_neon)
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1
+ .rept 4
+     ld1             {v0.8b}, [x0], x3
+-    ld1             {v1.8b}, [x1], x3
++    ld1             {v1.8b}, [x1], x4
+     ld1             {v2.8b}, [x0], x3
+-    ld1             {v3.8b}, [x1], x3
++    ld1             {v3.8b}, [x1], x4
+     usubl           v4.8h, v0.8b, v1.8b
+     usubl           v5.8h, v2.8b, v3.8b
+-    st1             {v4.16b}, [x2], x4
+-    st1             {v5.16b}, [x2], x4
++    st1             {v4.16b}, [x2], x6
++    st1             {v5.16b}, [x2], x6
+ .endr
+     ret
+ endfunc
+ 
+ function PFX(getResidual16_neon)
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1
+ .rept 8
+     ld1             {v0.16b}, [x0], x3
+-    ld1             {v1.16b}, [x1], x3
++    ld1             {v1.16b}, [x1], x4
+     ld1             {v2.16b}, [x0], x3
+-    ld1             {v3.16b}, [x1], x3
++    ld1             {v3.16b}, [x1], x4
+     usubl           v4.8h, v0.8b, v1.8b
+     usubl2          v5.8h, v0.16b, v1.16b
+     usubl           v6.8h, v2.8b, v3.8b
+     usubl2          v7.8h, v2.16b, v3.16b
+-    st1             {v4.8h-v5.8h}, [x2], x4
+-    st1             {v6.8h-v7.8h}, [x2], x4
++    st1             {v4.8h-v5.8h}, [x2], x6
++    st1             {v6.8h-v7.8h}, [x2], x6
+ .endr
+     ret
+ endfunc
+ 
+ function PFX(getResidual32_neon)
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1
+     mov             w12, #4
+ .Loop_residual_32:
+     sub             w12, w12, #1
+ .rept 4
+     ld1             {v0.16b-v1.16b}, [x0], x3
+-    ld1             {v2.16b-v3.16b}, [x1], x3
++    ld1             {v2.16b-v3.16b}, [x1], x4
+     ld1             {v4.16b-v5.16b}, [x0], x3
+-    ld1             {v6.16b-v7.16b}, [x1], x3
++    ld1             {v6.16b-v7.16b}, [x1], x4
+     usubl           v16.8h, v0.8b, v2.8b
+     usubl2          v17.8h, v0.16b, v2.16b
+     usubl           v18.8h, v1.8b, v3.8b
+@@ -163,8 +165,8 @@
+     usubl2          v21.8h, v4.16b, v6.16b
+     usubl           v22.8h, v5.8b, v7.8b
+     usubl2          v23.8h, v5.16b, v7.16b
+-    st1             {v16.8h-v19.8h}, [x2], x4
+-    st1             {v20.8h-v23.8h}, [x2], x4
++    st1             {v16.8h-v19.8h}, [x2], x6
++    st1             {v20.8h-v23.8h}, [x2], x6
+ .endr
+     cbnz            w12, .Loop_residual_32
+     ret
+--- a/source/common/aarch64/pixel-util-sve2.S
++++ b/source/common/aarch64/pixel-util-sve2.S
+@@ -230,22 +230,25 @@
+     ret
+ endfunc
+ 
++// getResidualNN_sve2(const pixel* fenc, const pixel* pred, int16_t* residual,
++//                    intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
++//   x0=fenc, x1=pred, x2=residual, x3=fencStride, x4=predStride, x5=resiStride (int16_t units)
+ function PFX(getResidual16_sve2)
+     rdvl            x9, #1
+     cmp             x9, #16
+     bgt             .vl_gt_16_getResidual16
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1
+ .rept 8
+     ld1             {v0.16b}, [x0], x3
+-    ld1             {v1.16b}, [x1], x3
++    ld1             {v1.16b}, [x1], x4
+     ld1             {v2.16b}, [x0], x3
+-    ld1             {v3.16b}, [x1], x3
++    ld1             {v3.16b}, [x1], x4
+     usubl           v4.8h, v0.8b, v1.8b
+     usubl2          v5.8h, v0.16b, v1.16b
+     usubl           v6.8h, v2.8b, v3.8b
+     usubl2          v7.8h, v2.16b, v3.16b
+-    st1             {v4.8h-v5.8h}, [x2], x4
+-    st1             {v6.8h-v7.8h}, [x2], x4
++    st1             {v4.8h-v5.8h}, [x2], x6
++    st1             {v6.8h-v7.8h}, [x2], x6
+ .endr
+     ret
+ .vl_gt_16_getResidual16:
+@@ -254,10 +257,10 @@
+     ld1b            {z0.h}, p0/z, [x0]
+     ld1b            {z2.h}, p0/z, [x1]
+     add             x0, x0, x3
+-    add             x1, x1, x3
++    add             x1, x1, x4
+     sub             z4.h, z0.h, z2.h
+     st1h            {z4.h}, p0, [x2]
+-    add             x2, x2, x3, lsl #1
++    add             x2, x2, x5, lsl #1
+ .endr
+     ret
+ endfunc
+@@ -266,15 +269,15 @@
+     rdvl            x9, #1
+     cmp             x9, #16
+     bgt             .vl_gt_16_getResidual32
+-    lsl             x4, x3, #1
++    lsl             x6, x5, #1
+     mov             w12, #4
+ .Loop_residual_32:
+     sub             w12, w12, #1
+ .rept 4
+     ld1             {v0.16b-v1.16b}, [x0], x3
+-    ld1             {v2.16b-v3.16b}, [x1], x3
++    ld1             {v2.16b-v3.16b}, [x1], x4
+     ld1             {v4.16b-v5.16b}, [x0], x3
+-    ld1             {v6.16b-v7.16b}, [x1], x3
++    ld1             {v6.16b-v7.16b}, [x1], x4
+     usubl           v16.8h, v0.8b, v2.8b
+     usubl2          v17.8h, v0.16b, v2.16b
+     usubl           v18.8h, v1.8b, v3.8b
+@@ -283,8 +286,8 @@
+     usubl2          v21.8h, v4.16b, v6.16b
+     usubl           v22.8h, v5.8b, v7.8b
+     usubl2          v23.8h, v5.16b, v7.16b
+-    st1             {v16.8h-v19.8h}, [x2], x4
+-    st1             {v20.8h-v23.8h}, [x2], x4
++    st1             {v16.8h-v19.8h}, [x2], x6
++    st1             {v20.8h-v23.8h}, [x2], x6
+ .endr
+     cbnz            w12, .Loop_residual_32
+     ret
+@@ -296,11 +299,11 @@
+     ld1b            {z0.b}, p0/z, [x0]
+     ld1b            {z2.b}, p0/z, [x1]
+     add             x0, x0, x3
+-    add             x1, x1, x3
++    add             x1, x1, x4
+     usublb          z4.h, z0.b, z2.b
+     usublt          z5.h, z0.b, z2.b
+     st2h            {z4.h, z5.h}, p0, [x2]
+-    add             x2, x2, x3, lsl #1
++    add             x2, x2, x5, lsl #1
+ .endr
+     ret
+ .vl_gt_48_getResidual32:
+@@ -309,10 +312,10 @@
+     ld1b            {z0.h}, p0/z, [x0]
+     ld1b            {z4.h}, p0/z, [x1]
+     add             x0, x0, x3
+-    add             x1, x1, x3
++    add             x1, x1, x4
+     sub             z8.h, z0.h, z4.h
+     st1h            {z8.h}, p0, [x2]
+-    add             x2, x2, x3, lsl #1
++    add             x2, x2, x5, lsl #1
+ .endr
+     ret
+ endfunc
+--- a/source/common/cudata.cpp
++++ b/source/common/cudata.cpp
+@@ -493,47 +493,114 @@
+ {
+     CUData& ctu = *m_encData->getPicCTU(m_cuAddr);
+ 
+-    m_partCopy((uint8_t*)ctu.m_qp + m_absIdxInCTU, (uint8_t*)m_qp);
+-    m_partCopy((uint8_t*)ctu.m_qpAnalysis + m_absIdxInCTU, (uint8_t*)m_qpAnalysis);
+-    m_partCopy(ctu.m_log2CUSize + m_absIdxInCTU, m_log2CUSize);
+-    m_partCopy(ctu.m_lumaIntraDir + m_absIdxInCTU, m_lumaIntraDir);
+-    m_partCopy(ctu.m_tqBypass + m_absIdxInCTU, m_tqBypass);
+-    m_partCopy((uint8_t*)ctu.m_refIdx[0] + m_absIdxInCTU, (uint8_t*)m_refIdx[0]);
+-    m_partCopy((uint8_t*)ctu.m_refIdx[1] + m_absIdxInCTU, (uint8_t*)m_refIdx[1]);
+-    m_partCopy(ctu.m_cuDepth + m_absIdxInCTU, m_cuDepth);
+-    m_partCopy(ctu.m_predMode + m_absIdxInCTU, m_predMode);
+-    m_partCopy(ctu.m_partSize + m_absIdxInCTU, m_partSize);
+-    m_partCopy(ctu.m_mergeFlag + m_absIdxInCTU, m_mergeFlag);
+-    m_partCopy(ctu.m_interDir + m_absIdxInCTU, m_interDir);
+-    m_partCopy(ctu.m_mvpIdx[0] + m_absIdxInCTU, m_mvpIdx[0]);
+-    m_partCopy(ctu.m_mvpIdx[1] + m_absIdxInCTU, m_mvpIdx[1]);
+-    m_partCopy(ctu.m_tuDepth + m_absIdxInCTU, m_tuDepth);
+-    m_partCopy(ctu.m_transformSkip[0] + m_absIdxInCTU, m_transformSkip[0]);
+-    m_partCopy(ctu.m_cbf[0] + m_absIdxInCTU, m_cbf[0]);
+-
+-    memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
++    /* Phase 6 (2026-07-02): at a full-CTU commit (m_absIdxInCTU == 0 and the
++     * source has the same partition count as the target), the ~22 per-field
++     * copy16/copy4 calls in the original body all hit contiguous regions of
++     * the char-mem block (see CUData::initialize field layout).  Replace them
++     * with two contiguous memcpys that straddle the m_skipFlag[0/1] slots we
++     * intentionally DO NOT overwrite (skipFlag is populated separately by the
++     * --analysis-load path at analysis.cpp:293; preserving those bytes keeps
++     * that feature working).
++     *
++     * ONLY fires when the analysis Mode's CUData has the same layout as the
++     * frame's picture CTU CUData — same numPartitions and same csp.  Falls
++     * back to the field-by-field path for sub-CU commits (m_absIdxInCTU != 0
++     * or partition-count mismatch). */
++    if (m_absIdxInCTU == 0 && m_numPartitions == ctu.m_numPartitions &&
++        m_chromaFormat == ctu.m_chromaFormat)
++    {
++        const uint32_t np = m_numPartitions;
++        /* Layout for CSP != I400 (24 fields):
++         *   0 m_qp             1 m_qpAnalysis      2 m_log2CUSize
++         *   3 m_lumaIntraDir   4 m_tqBypass        5 m_refIdx[0]
++         *   6 m_refIdx[1]      7 m_cuDepth         8 m_predMode
++         *   9 m_partSize      10 m_skipFlag[0]    11 m_skipFlag[1]      <-- SKIP
++         *  12 m_mergeFlag     13 m_interDir       14 m_mvpIdx[0]
++         *  15 m_mvpIdx[1]     16 m_tuDepth        17 m_transformSkip[0]
++         *  18 m_transformSkip[1] 19 m_transformSkip[2] 20 m_cbf[0]
++         *  21 m_cbf[1]        22 m_cbf[2]         23 m_chromaIntraDir
++         * Layout for CSP == I400 (20 fields, no chroma slots):
++         *   ... same 0..9 ...  10 m_skipFlag[0]    11 m_skipFlag[1]      <-- SKIP
++         *  12 m_mergeFlag     13 m_interDir       14 m_mvpIdx[0]
++         *  15 m_mvpIdx[1]     16 m_tuDepth        17 m_transformSkip[0]
++         *  18 m_cbf[0]        19 m_chromaIntraDir (redundant but present)
++         *
++         * Copy 0..9 (10 fields), skip 10..11, copy 12..end. */
++        memcpy((uint8_t*)ctu.m_qp,        (uint8_t*)m_qp,        10 * np);
++        /* m_skipFlag stays untouched */
++        const int trailing = (ctu.m_chromaFormat == X265_CSP_I400)
++                             ? (BytesPerPartition - 4) - 12
++                             :  BytesPerPartition - 12;
++        memcpy(ctu.m_mergeFlag, m_mergeFlag, trailing * np);
++    }
++    else
++    {
++        m_partCopy((uint8_t*)ctu.m_qp + m_absIdxInCTU, (uint8_t*)m_qp);
++        m_partCopy((uint8_t*)ctu.m_qpAnalysis + m_absIdxInCTU, (uint8_t*)m_qpAnalysis);
++        m_partCopy(ctu.m_log2CUSize + m_absIdxInCTU, m_log2CUSize);
++        m_partCopy(ctu.m_lumaIntraDir + m_absIdxInCTU, m_lumaIntraDir);
++        m_partCopy(ctu.m_tqBypass + m_absIdxInCTU, m_tqBypass);
++        m_partCopy((uint8_t*)ctu.m_refIdx[0] + m_absIdxInCTU, (uint8_t*)m_refIdx[0]);
++        m_partCopy((uint8_t*)ctu.m_refIdx[1] + m_absIdxInCTU, (uint8_t*)m_refIdx[1]);
++        m_partCopy(ctu.m_cuDepth + m_absIdxInCTU, m_cuDepth);
++        m_partCopy(ctu.m_predMode + m_absIdxInCTU, m_predMode);
++        m_partCopy(ctu.m_partSize + m_absIdxInCTU, m_partSize);
++        m_partCopy(ctu.m_mergeFlag + m_absIdxInCTU, m_mergeFlag);
++        m_partCopy(ctu.m_interDir + m_absIdxInCTU, m_interDir);
++        m_partCopy(ctu.m_mvpIdx[0] + m_absIdxInCTU, m_mvpIdx[0]);
++        m_partCopy(ctu.m_mvpIdx[1] + m_absIdxInCTU, m_mvpIdx[1]);
++        m_partCopy(ctu.m_tuDepth + m_absIdxInCTU, m_tuDepth);
++        m_partCopy(ctu.m_transformSkip[0] + m_absIdxInCTU, m_transformSkip[0]);
++        m_partCopy(ctu.m_cbf[0] + m_absIdxInCTU, m_cbf[0]);
++        if (ctu.m_chromaFormat != X265_CSP_I400)
++        {
++            m_partCopy(ctu.m_transformSkip[1] + m_absIdxInCTU, m_transformSkip[1]);
++            m_partCopy(ctu.m_transformSkip[2] + m_absIdxInCTU, m_transformSkip[2]);
++            m_partCopy(ctu.m_cbf[1] + m_absIdxInCTU, m_cbf[1]);
++            m_partCopy(ctu.m_cbf[2] + m_absIdxInCTU, m_cbf[2]);
++            m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
++        }
++    }
++
++    /* Phase 6b (2026-07-02): m_mv[0..1] + m_mvd[0..1] are laid out contiguously
++     * in the shared mvMemBlock (see CUData::initialize) — at a full-CTU commit
++     * with matching np, fold the four memcpys into one. */
++    if (m_absIdxInCTU == 0 && m_numPartitions == ctu.m_numPartitions)
++    {
++        memcpy(ctu.m_mv[0], m_mv[0], 4 * m_numPartitions * sizeof(MV));
++    }
++    else
++    {
++        memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
++        memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
++        memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
++        memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
++    }
+ 
+     memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
+ 
+     uint32_t tmpY = 1 << ((m_slice->m_param->maxLog2CUSize - depth) * 2);
+     uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);
+-    memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
+ 
+-    if (ctu.m_chromaFormat != X265_CSP_I400)
++    /* Phase 6b: coeff planes are contiguous in trCoeffMemBlock at offsets 0
++     * (Y), sizeL (Cb), sizeL+sizeC (Cr).  At a full-CTU commit the three
++     * separate memcpys collapse to one. */
++    if (m_absIdxInCTU == 0 && ctu.m_chromaFormat != X265_CSP_I400 &&
++        m_hChromaShift == ctu.m_hChromaShift && m_vChromaShift == ctu.m_vChromaShift)
+     {
+-        m_partCopy(ctu.m_transformSkip[1] + m_absIdxInCTU, m_transformSkip[1]);
+-        m_partCopy(ctu.m_transformSkip[2] + m_absIdxInCTU, m_transformSkip[2]);
+-        m_partCopy(ctu.m_cbf[1] + m_absIdxInCTU, m_cbf[1]);
+-        m_partCopy(ctu.m_cbf[2] + m_absIdxInCTU, m_cbf[2]);
+-        m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
+-
+         uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
+-        uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
+-        memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
+-        memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
++        memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
++    }
++    else
++    {
++        memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
++        if (ctu.m_chromaFormat != X265_CSP_I400)
++        {
++            uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
++            uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
++            memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
++            memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
++        }
+     }
+ }
+ 
+--- a/source/common/pixel.cpp
++++ b/source/common/pixel.cpp
+@@ -368,6 +368,7 @@
+     return cost;
+ }
+ 
++
+ template<int size>
+ sse_t pixel_ssd_s_c(const int16_t* a, intptr_t dstride)
+ {
+@@ -461,16 +462,17 @@
+ }
+ 
+ template<int blockSize>
+-void getResidual(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride)
++void getResidual(const pixel* fenc, const pixel* pred, int16_t* residual,
++                 intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
+ {
+     for (int y = 0; y < blockSize; y++)
+     {
+         for (int x = 0; x < blockSize; x++)
+             residual[x] = static_cast<int16_t>(fenc[x]) - static_cast<int16_t>(pred[x]);
+ 
+-        fenc += stride;
+-        residual += stride;
+-        pred += stride;
++        fenc     += fencStride;
++        pred     += predStride;
++        residual += resiStride;
+     }
+ }
+ 
+--- a/source/common/primitives.h
++++ b/source/common/primitives.h
+@@ -154,7 +154,13 @@
+ typedef void (*idct_t)(const int16_t* src, int16_t* dst, intptr_t dstStride);
+ typedef void (*denoiseDct_t)(int16_t* dctCoef, uint32_t* resSum, const uint16_t* offset, int numCoeff);
+ 
+-typedef void (*calcresidual_t)(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride);
++/* Memory-refactor 2026-07-01: calcresidual now takes THREE strides. Previously
++ * shared one stride across fenc/pred/residual, forcing all three buffers to
++ * have identical strides — broke any refactor (e.g. fencYuv-as-view) that gave
++ * fenc a different stride. Valgrind found this via out-of-bounds ShortYuv
++ * writes from getResidual16_neon. */
++typedef void (*calcresidual_t)(const pixel* fenc, const pixel* pred, int16_t* residual,
++                               intptr_t fencStride, intptr_t predStride, intptr_t resiStride);
+ typedef void (*transpose_t)(pixel* dst, const pixel* src, intptr_t stride);
+ typedef uint32_t (*quant_t)(const int16_t* coef, const int32_t* quantCoeff, int32_t* deltaU, int16_t* qCoef, int qBits, int add, int numCoeff);
+ typedef uint32_t (*nquant_t)(const int16_t* coef, const int32_t* quantCoeff, int16_t* qCoef, int qBits, int add, int numCoeff);
+--- a/source/common/shortyuv.cpp
++++ b/source/common/shortyuv.cpp
+@@ -40,15 +40,26 @@
+ bool ShortYuv::create(uint32_t size, int csp)
+ {
+     m_csp = csp;
+-    m_size = size;
+     m_hChromaShift = CHROMA_H_SHIFT(csp);
+     m_vChromaShift = CHROMA_V_SHIFT(csp);
+-    size_t sizeL = size * size;
++
++    /* Match Yuv's stride-padding so calcresidual (which uses a single stride
++     * for fenc/pred/residual) doesn't walk off the end of this buffer when
++     * the aligned primitive variant is selected. See yuv.cpp for details. */
++    const uint32_t STRIDE_ALIGN = 64;
++    uint32_t lumaStride = (size + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
++    m_size = lumaStride;
++    m_lumaHeight = size;
++    size_t sizeL = (size_t)lumaStride * size;
+ 
+     if (csp != X265_CSP_I400)
+     {
+-        m_csize = size >> m_hChromaShift;
+-        size_t sizeC = sizeL >> (m_hChromaShift + m_vChromaShift);
++        uint32_t chromaWidth  = size >> m_hChromaShift;
++        uint32_t chromaHeight = size >> m_vChromaShift;
++        uint32_t chromaStride = (chromaWidth + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
++        m_csize = chromaStride;
++        m_chromaHeight = chromaHeight;
++        size_t sizeC = (size_t)chromaStride * chromaHeight;
+         X265_CHECK((sizeC & 15) == 0, "invalid size");
+ 
+         CHECKED_MALLOC(m_buf[0], int16_t, sizeL + sizeC * 2);
+@@ -57,6 +68,7 @@
+     }
+     else
+     {
++        m_chromaHeight = 0;
+         CHECKED_MALLOC(m_buf[0], int16_t, sizeL);
+         m_buf[1] = m_buf[2] = NULL;
+     }
+@@ -73,9 +85,12 @@
+ 
+ void ShortYuv::clear()
+ {
+-    memset(m_buf[0], 0, (m_size  * m_size) *  sizeof(int16_t));
+-    memset(m_buf[1], 0, (m_csize * m_csize) * sizeof(int16_t));
+-    memset(m_buf[2], 0, (m_csize * m_csize) * sizeof(int16_t));
++    /* m_size is stride, m_lumaHeight is actual row count. */
++    memset(m_buf[0], 0, (size_t)m_size  * m_lumaHeight   * sizeof(int16_t));
++    if (m_buf[1])
++        memset(m_buf[1], 0, (size_t)m_csize * m_chromaHeight * sizeof(int16_t));
++    if (m_buf[2])
++        memset(m_buf[2], 0, (size_t)m_csize * m_chromaHeight * sizeof(int16_t));
+ }
+ 
+ void ShortYuv::subtract(const Yuv& srcYuv0, const Yuv& srcYuv1, uint32_t log2Size, int picCsp)
+--- a/source/common/shortyuv.h
++++ b/source/common/shortyuv.h
+@@ -41,8 +41,11 @@
+ 
+     int16_t* m_buf[3];
+ 
+-    uint32_t m_size;
+-    uint32_t m_csize;
++    uint32_t m_size;         // luma stride (padded to STRIDE_ALIGN)
++    uint32_t m_csize;        // chroma stride (padded)
++    /* Heights are separate from strides now that m_size is padded. */
++    uint32_t m_lumaHeight;
++    uint32_t m_chromaHeight;
+ 
+     int      m_csp;
+     int      m_hChromaShift;
+--- a/source/common/yuv.cpp
++++ b/source/common/yuv.cpp
+@@ -29,6 +29,30 @@
+ #include "picyuv.h"
+ #include "primitives.h"
+ 
++/* ASAN redzone instrumentation — when built with -fsanitize=address, this
++ * inserts a 4 KB poisoned region between the luma and chroma planes of
++ * every Yuv create(). Any consumer that reads past the CU's luma boundary
++ * (i.e., past sizeL bytes in m_buf[0]) lands in the redzone and ASAN
++ * reports a use-after-poison with a stack trace.
++ *
++ * Used to diagnose the Phase 1 fencYuv-as-view MD5 regression. */
++#if defined(__has_feature)
++#  if __has_feature(address_sanitizer)
++#    define X265_ASAN 1
++#    include <sanitizer/asan_interface.h>
++#  endif
++#endif
++#if !defined(X265_ASAN) && defined(__SANITIZE_ADDRESS__)
++#  define X265_ASAN 1
++#  include <sanitizer/asan_interface.h>
++#endif
++
++#if X265_ASAN
++#  define YUV_REDZONE 4096
++#else
++#  define YUV_REDZONE 0
++#endif
++
+ using namespace X265_NS;
+ 
+ Yuv::Yuv()
+@@ -36,6 +60,12 @@
+     m_buf[0] = NULL;
+     m_buf[1] = NULL;
+     m_buf[2] = NULL;
++    m_ownedBuf[0] = NULL;
++    m_ownedBuf[1] = NULL;
++    m_ownedBuf[2] = NULL;
++    m_ownedSize  = 0;
++    m_ownedCSize = 0;
++    m_isView = false;
+ }
+ 
+ bool Yuv::create(uint32_t size, int csp)
+@@ -43,6 +73,7 @@
+     m_csp = csp;
+     m_hChromaShift = CHROMA_H_SHIFT(csp);
+     m_vChromaShift = CHROMA_V_SHIFT(csp);
++    m_isView = false;
+ 
+     m_size  = size;
+     m_part = partitionFromSizes(size, size);
+@@ -52,26 +83,50 @@
+             for (int k = 0; k < INTEGRAL_PLANE_NUM; k++)
+                 m_integral[i][j][k] = NULL;
+ 
++    /* PADDING RE-ENABLED for valgrind investigation. */
++    const uint32_t STRIDE_ALIGN = 64;
++    uint32_t lumaStride = (size + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
+     if (csp == X265_CSP_I400)
+     {
+-        CHECKED_MALLOC(m_buf[0], pixel, size * size + 8);
++        CHECKED_MALLOC(m_buf[0], pixel, lumaStride * size + 8);
+         m_buf[1] = m_buf[2] = 0;
++        m_size  = lumaStride;
+         m_csize = 0;
++        m_ownedBuf[0] = m_buf[0];
++        m_ownedBuf[1] = NULL;
++        m_ownedBuf[2] = NULL;
++        m_ownedSize   = m_size;
++        m_ownedCSize  = 0;
+         return true;
+     }
+     else
+     {
+-        m_csize = size >> m_hChromaShift;
++        uint32_t chromaWidth  = size >> m_hChromaShift;
++        uint32_t chromaHeight = size >> m_vChromaShift;
++        uint32_t chromaStride = (chromaWidth + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
++
++        m_size  = lumaStride;
++        m_csize = chromaStride;
+ 
+-        size_t sizeL = size * size;
+-        size_t sizeC = sizeL >> (m_vChromaShift + m_hChromaShift);
++        size_t sizeL = (size_t)lumaStride * size;
++        size_t sizeC = (size_t)chromaStride * chromaHeight;
+ 
+         X265_CHECK((sizeC & 15) == 0, "invalid size");
+ 
+-        // memory allocation (padded for SIMD reads)
+-        CHECKED_MALLOC(m_buf[0], pixel, sizeL + sizeC * 2 + 8);
+-        m_buf[1] = m_buf[0] + sizeL;
+-        m_buf[2] = m_buf[0] + sizeL + sizeC;
++        CHECKED_MALLOC(m_buf[0], pixel, sizeL + YUV_REDZONE + sizeC * 2 + 8);
++        m_buf[1] = m_buf[0] + sizeL + YUV_REDZONE;
++        m_buf[2] = m_buf[0] + sizeL + YUV_REDZONE + sizeC;
++#if X265_ASAN
++        __asan_poison_memory_region(m_buf[0] + sizeL, YUV_REDZONE * sizeof(pixel));
++#endif
++        /* Phase 3 (2026-07-01): snapshot the just-allocated state so
++         * setReconView / resetView can toggle between owned scratch and a
++         * picture-buffer view without losing the allocation. */
++        m_ownedBuf[0] = m_buf[0];
++        m_ownedBuf[1] = m_buf[1];
++        m_ownedBuf[2] = m_buf[2];
++        m_ownedSize   = m_size;
++        m_ownedCSize  = m_csize;
+         return true;
+     }
+ 
+@@ -79,13 +134,106 @@
+     return false;
+ }
+ 
++/* Same as create() but skips buffer allocation. Used for Yuvs intended to be
++ * views into an external buffer (currently the picture buffer via setView).
++ * m_buf[] stay NULL; m_size/m_csize stay as the CU-width values for now and
++ * will be overwritten to the external stride when setView is called. */
++bool Yuv::createView(uint32_t size, int csp)
++{
++    m_csp = csp;
++    m_hChromaShift = CHROMA_H_SHIFT(csp);
++    m_vChromaShift = CHROMA_V_SHIFT(csp);
++    m_isView = true;
++
++    m_size  = size;
++    m_part  = partitionFromSizes(size, size);
++
++    for (int i = 0; i < 2; i++)
++        for (int j = 0; j < MAX_NUM_REF; j++)
++            for (int k = 0; k < INTEGRAL_PLANE_NUM; k++)
++                m_integral[i][j][k] = NULL;
++
++    m_csize  = (csp == X265_CSP_I400) ? 0 : (size >> m_hChromaShift);
++    m_buf[0] = m_buf[1] = m_buf[2] = NULL;
++    return true;
++}
++
++/* Repoint the Yuv at the CU's pixels inside an external picture buffer.
++ * Strides become the picture-level strides, NOT the CU width. */
++void Yuv::setView(const PicYuv& srcPic, uint32_t cuAddr, uint32_t absPartIdx)
++{
++    X265_CHECK(m_isView, "setView called on a Yuv that was create()'d, not createView()'d\n");
++
++    /* getLumaAddr(cuAddr, absPartIdx) gives the picture-buffer pointer to the
++     * CU's top-left. The result is the same pixel that copyFromPicYuv would
++     * have copied into m_buf[0][0]. */
++    m_buf[0] = const_cast<pixel *>(srcPic.getLumaAddr(cuAddr, absPartIdx));
++    m_size   = srcPic.m_stride;
++    if (m_csp != X265_CSP_I400)
++    {
++        m_buf[1] = const_cast<pixel *>(srcPic.getCbAddr(cuAddr, absPartIdx));
++        m_buf[2] = const_cast<pixel *>(srcPic.getCrAddr(cuAddr, absPartIdx));
++        m_csize  = srcPic.m_strideC;
++    }
++}
++
++/* Phase 3 (2026-07-01): temporarily view a create()'d Yuv into the
++ * reconstruction-picture buffer for direct write.  Preserves the owned
++ * allocation so resetView() can restore it. */
++void Yuv::setReconView(PicYuv& dstPic, uint32_t cuAddr, uint32_t absPartIdx)
++{
++    X265_CHECK(m_ownedBuf[0] != NULL, "setReconView on a Yuv that never allocated\n");
++    X265_CHECK(!m_isView, "setReconView on an already-viewed Yuv\n");
++
++    m_buf[0] = dstPic.getLumaAddr(cuAddr, absPartIdx);
++    m_size   = dstPic.m_stride;
++    if (m_csp != X265_CSP_I400)
++    {
++        m_buf[1] = dstPic.getCbAddr(cuAddr, absPartIdx);
++        m_buf[2] = dstPic.getCrAddr(cuAddr, absPartIdx);
++        m_csize  = dstPic.m_strideC;
++    }
++    m_isView = true;
++}
++
++/* Phase 3 (2026-07-01): restore the owned allocation after setReconView. */
++void Yuv::resetView()
++{
++    if (!m_isView)
++        return;
++    X265_CHECK(m_ownedBuf[0] != NULL, "resetView on a Yuv without an owned allocation\n");
++    m_buf[0] = m_ownedBuf[0];
++    m_buf[1] = m_ownedBuf[1];
++    m_buf[2] = m_ownedBuf[2];
++    m_size   = m_ownedSize;
++    m_csize  = m_ownedCSize;
++    m_isView = false;
++}
++
+ void Yuv::destroy()
+ {
+-    X265_FREE(m_buf[0]);
++    /* Free the owned allocation (from create()) if there is one.  A Yuv from
++     * createView() has m_ownedBuf[0]==NULL and owns nothing; a Yuv currently
++     * in setReconView() also has m_isView=true but its m_ownedBuf still owns
++     * the scratch — free THAT, not the view pointer.  Do NOT NULL-out
++     * m_buf[1]/[2] because upstream leaves them set post-destroy(). */
++    if (m_ownedBuf[0])
++    {
++#if X265_ASAN
++        __asan_unpoison_memory_region(m_ownedBuf[0], 4 * 1024 * 1024);
++#endif
++        X265_FREE(m_ownedBuf[0]);
++    }
+ }
+ 
+ void Yuv::copyToPicYuv(PicYuv& dstPic, uint32_t cuAddr, uint32_t absPartIdx) const
+ {
++    /* Phase 3 (2026-07-01): if we're currently a view AND the view target
++     * matches dstPic at these coordinates, the copy is a no-op — the writes
++     * that populated this Yuv already landed in dstPic. */
++    if (m_isView && dstPic.getLumaAddr(cuAddr, absPartIdx) == m_buf[0])
++        return;
++
+     pixel* dstY = dstPic.getLumaAddr(cuAddr, absPartIdx);
+     primitives.cu[m_part].copy_pp(dstY, dstPic.m_stride, m_buf[0], m_size);
+     if (m_csp != X265_CSP_I400)
+@@ -122,6 +270,28 @@
+     }
+ }
+ 
++/* Phase 2 (2026-07-01): O(1) pointer-swap alternative to copyFromYuv. See
++ * yuv.h for the invariants. When both Yuvs are non-view with matching
++ * dimensions, swapping m_buf[0..2] leaves both objects in valid state and
++ * preserves subsequent destroy() correctness (each still frees exactly one
++ * allocation). */
++void Yuv::adoptFrom(Yuv& src)
++{
++    X265_CHECK(!m_isView && !src.m_isView,   "adoptFrom on a view Yuv\n");
++    X265_CHECK(m_size  == src.m_size,        "adoptFrom size mismatch\n");
++    X265_CHECK(m_csize == src.m_csize,       "adoptFrom csize mismatch\n");
++    X265_CHECK(m_part  == src.m_part,        "adoptFrom part mismatch\n");
++    X265_CHECK(m_csp   == src.m_csp,         "adoptFrom csp mismatch\n");
++
++    /* Only the pixel-data pointers move. All shape metadata stays fixed. */
++    pixel* tmp = m_buf[0]; m_buf[0] = src.m_buf[0]; src.m_buf[0] = tmp;
++    if (m_csp != X265_CSP_I400)
++    {
++        tmp = m_buf[1]; m_buf[1] = src.m_buf[1]; src.m_buf[1] = tmp;
++        tmp = m_buf[2]; m_buf[2] = src.m_buf[2]; src.m_buf[2] = tmp;
++    }
++}
++
+ /* This version is intended for use by ME, which required FENC_STRIDE for luma fenc pixels */
+ void Yuv::copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma)
+ {
+--- a/source/common/yuv.h
++++ b/source/common/yuv.h
+@@ -49,11 +49,49 @@
+     int      m_vChromaShift;
+     uint32_t *m_integral[2][MAX_NUM_REF][INTEGRAL_PLANE_NUM];
+ 
++    /* Memory-refactor (Phase 1, 2026-06-30): when true, m_buf[] points into
++     * an external buffer (e.g. the picture-level PicYuv); destroy() must NOT
++     * free m_buf[0], and m_size/m_csize are the EXTERNAL stride, not the
++     * tight CU width. Set by setView() / createView() / setReconView(). */
++    bool     m_isView;
++
++    /* Memory-refactor (Phase 3, 2026-07-01): a Yuv that was create()'d has an
++     * owned pixel allocation.  When we temporarily point m_buf[] into the
++     * picture buffer (setReconView), we stash the owned pointer + strides
++     * here so resetView() can restore them.  For createView()'d Yuvs the
++     * owned pointer stays NULL — those never own a buffer. */
++    pixel*   m_ownedBuf[3];
++    uint32_t m_ownedSize;
++    uint32_t m_ownedCSize;
++
+     Yuv();
+ 
+     bool   create(uint32_t size, int csp);
++    /* Like create() but skips buffer allocation; the Yuv is intended to be
++     * used as a view via setView(). m_buf[] stay NULL until setView() runs. */
++    bool   createView(uint32_t size, int csp);
+     void   destroy();
+ 
++    /* Replace m_buf[] with a pointer into srcPicYuv at the given CTU.
++     * After this call:
++     *   m_buf[0] = picture's luma top-left of the CU at (cuAddr, absPartIdx)
++     *   m_size   = srcPicYuv.m_stride  (i.e., the picture-level stride)
++     *   m_csize  = srcPicYuv.m_strideC
++     *   m_isView = true
++     * Caller must guarantee Yuv was set up via createView() — does NOT free
++     * any existing allocation. */
++    void   setView(const PicYuv& srcPicYuv, uint32_t cuAddr, uint32_t absPartIdx);
++
++    /* Phase 3 (2026-07-01): point a create()'d Yuv into a picture buffer for
++     * WRITE access. Unlike setView(), the caller must have create()'d this
++     * Yuv (m_ownedBuf[0] != NULL). setReconView() stashes the current
++     * m_buf/m_size/m_csize into m_ownedBuf/m_ownedSize/m_ownedCSize so
++     * resetView() can restore them. Writes through this Yuv land directly
++     * in dstPicYuv's frame allocation; copyToPicYuv() becomes a no-op while
++     * the view is active. */
++    void   setReconView(PicYuv& dstPicYuv, uint32_t cuAddr, uint32_t absPartIdx);
++    void   resetView();
++
+     // Copy YUV buffer to picture buffer
+     void   copyToPicYuv(PicYuv& destPicYuv, uint32_t cuAddr, uint32_t absPartIdx) const;
+ 
+@@ -63,6 +101,15 @@
+     // Copy from same size YUV buffer
+     void   copyFromYuv(const Yuv& srcYuv);
+ 
++    /* Phase 2 (2026-07-01): O(1) alternative to copyFromYuv when the source
++     * Yuv is about to be discarded / reused as scratch. Swaps the m_buf[3]
++     * pointers between `*this` and `src`. Both Yuvs must have compatible
++     * dimensions (equal m_size / m_csize / m_part / m_csp); neither may be a
++     * view (m_isView must be false on both). After the call, `src` no longer
++     * holds the original pixel data — callers that read `src` afterwards
++     * must be updated to read `*this` (which now holds the data). */
++    void   adoptFrom(Yuv& src);
++
+     // Copy portion of srcYuv into ME prediction buffer
+     void   copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma);
+ 
+--- a/source/encoder/analysis.cpp
++++ b/source/encoder/analysis.cpp
+@@ -101,14 +101,44 @@
+     {
+         ModeDepth &md = m_modeDepth[depth];
+         ok &= md.cuMemPool.create(depth, csp, MAX_PRED_TYPES, *m_param);
+-        ok &= md.fencYuv.create(cuSize, csp);
++        /* Phase 1: depth-0 fencYuv is a view into the picture buffer. */
++        if (depth == 0)
++            ok &= md.fencYuv.createView(cuSize, csp);
++        else
++            ok &= md.fencYuv.create(cuSize, csp);
+         if (ok)
+         {
+             for (int j = 0; j < MAX_PRED_TYPES; j++)
+             {
+                 md.pred[j].cu.initialize(md.cuMemPool, depth, *m_param, j);
+-                ok &= md.pred[j].predYuv.create(cuSize, csp);
+-                ok &= md.pred[j].reconYuv.create(cuSize, csp);
++
++                /* Phase 5 slice (2026-07-02): skip predYuv/reconYuv allocation
++                 * for Mode slots whose entire code path is gated off by the
++                 * current encoder configuration.  cu.initialize stays because
++                 * some code (e.g. compressInterCU_dist:1129) touches cu
++                 * unconditionally, but predYuv/reconYuv are only touched inside
++                 * the corresponding gate.  Yuv default-constructed state has
++                 * m_ownedBuf=NULL, so destroy() is a no-op — no leak.
++                 *
++                 * If a gated code path accidentally fires the crash is a
++                 * NULL-deref inside a primitive call — visible immediately,
++                 * not a silent quality regression. */
++                const bool skipModeYuv =
++                    /* PRED_LOSSLESS: only tryLossless() reads it, guarded by m_bTryLossless. */
++                    (j == PRED_LOSSLESS && !m_bTryLossless)
++                    /* PRED_BIDIR: only touched under B_SLICE / PMODE paths, off with --bframes 0. */
++                 || (j == PRED_BIDIR && !m_param->bframes)
++                    /* Rect inter Nx2N / 2NxN: gated by --rect (bEnableRectInter). */
++                 || ((j == PRED_Nx2N || j == PRED_2NxN) && !m_param->bEnableRectInter)
++                    /* AMP partitions: gated by --amp (bEnableAMP). */
++                 || ((j == PRED_2NxnU || j == PRED_2NxnD ||
++                      j == PRED_nLx2N || j == PRED_nRx2N) && !m_param->bEnableAMP);
++
++                if (!skipModeYuv)
++                {
++                    ok &= md.pred[j].predYuv.create(cuSize, csp);
++                    ok &= md.pred[j].reconYuv.create(cuSize, csp);
++                }
+                 md.pred[j].fencYuv = &md.fencYuv;
+             }
+         }
+@@ -151,7 +181,8 @@
+ 
+     m_rqt[0].cur.load(initialContext);
+     ctu.m_meanQP = initialContext.m_meanQP;
+-    m_modeDepth[0].fencYuv.copyFromPicYuv(*m_frame->m_fencPic, ctu.m_cuAddr, 0);
++    /* Phase 1: view fenc directly into the picture buffer. */
++    m_modeDepth[0].fencYuv.setView(*m_frame->m_fencPic, ctu.m_cuAddr, 0);
+ 
+     if (m_param->bSsimRd)
+         calculateNormFactor(ctu, qp);
+@@ -1863,11 +1894,20 @@
+                             cu.getInterTUQtDepthRange(tuDepthRange, 0);
+                             m_rqt[cuGeom.depth].tmpResiYuv.subtract(*md.bestMode->fencYuv, md.bestMode->predYuv, cuGeom.log2CUSize, m_frame->m_fencPic->m_picCsp);
+                             residualTransformQuantInter(*md.bestMode, cuGeom, 0, 0, tuDepthRange);
++                            /* Phase 3 for cbf=1 (addClip writes reconPic directly
++                             * via view; CU-commit copyToPicYuv becomes a no-op).
++                             * cbf=0 stays with the Phase 2 pointer-swap — under
++                             * multi-thread contention (measured 4t rt on Pi 5),
++                             * the zero-copy adoptFrom beats view+copy by ~0.5s
++                             * per 30s encode; single-thread it's a wash. */
+                             if (cu.getQtRootCbf(0))
++                            {
++                                md.bestMode->reconYuv.setReconView(reconPic, cu.m_cuAddr, cuGeom.absPartIdx);
+                                 md.bestMode->reconYuv.addClip(md.bestMode->predYuv, m_rqt[cuGeom.depth].tmpResiYuv, cu.m_log2CUSize[0], m_frame->m_fencPic->m_picCsp);
++                            }
+                             else
+                             {
+-                                md.bestMode->reconYuv.copyFromYuv(md.bestMode->predYuv);
++                                md.bestMode->reconYuv.adoptFrom(md.bestMode->predYuv);
+                                 if (cu.m_mergeFlag[0] && cu.m_partSize[0] == SIZE_2Nx2N)
+                                     cu.setPredModeSubParts(MODE_SKIP);
+                             }
+@@ -1885,13 +1925,20 @@
+                             uint32_t tuDepthRange[2];
+                             cu.getIntraTUQtDepthRange(tuDepthRange, 0);
+ 
++                            /* Phase 3: residualTransformQuant{Intra,QTIntraChroma} already
++                             * write directly to reconPic via picReconY / picReconC pointers.
++                             * Point reconYuv into reconPic BEFORE the write so downstream
++                             * reads see the picture pixels and the CU-commit
++                             * copyToPicYuv becomes a no-op (kills the old redundant
++                             * copyFromPicYuv/copyToPicYuv round-trip). */
++                            md.bestMode->reconYuv.setReconView(reconPic, cu.m_cuAddr, cuGeom.absPartIdx);
++
+                             residualTransformQuantIntra(*md.bestMode, cuGeom, 0, 0, tuDepthRange);
+                             if (m_csp != X265_CSP_I400)
+                             {
+                                 getBestIntraModeChroma(*md.bestMode, cuGeom);
+                                 residualQTIntraChroma(*md.bestMode, cuGeom, 0, 0);
+                             }
+-                            md.bestMode->reconYuv.copyFromPicYuv(reconPic, cu.m_cuAddr, cuGeom.absPartIdx); // TODO:
+                         }
+                     }
+                 }
+@@ -1953,7 +2000,13 @@
+         /* Copy best data to encData CTU and recon */
+         md.bestMode->cu.copyToPic(depth);
+         if (m_param->rdLevel)
++        {
++            /* Phase 3: no-op if reconYuv was setReconView'd into reconPic (data
++             * is already there). resetView restores the owned scratch so the
++             * next CTU starts from a clean state. */
+             md.bestMode->reconYuv.copyToPicYuv(reconPic, cuAddr, cuGeom.absPartIdx);
++            md.bestMode->reconYuv.resetView();
++        }
+ 
+         if ((m_limitTU & X265_TU_LIMIT_NEIGH) && cuGeom.log2CUSize >= 4)
+         {
+--- a/source/encoder/search.cpp
++++ b/source/encoder/search.cpp
+@@ -342,7 +342,9 @@
+         const pixel* fenc = mode.fencYuv->getLumaAddr(absPartIdx);
+         pixel*   pred     = mode.predYuv.getLumaAddr(absPartIdx);
+         int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
+-        uint32_t stride   = mode.fencYuv->m_size;
++        uint32_t fencStride = mode.fencYuv->m_size;
++        uint32_t predStride = mode.predYuv.m_size;
++        uint32_t resiStride = m_rqt[cuGeom.depth].tmpResiYuv.m_size;
+ 
+         // init availability pattern
+         uint32_t lumaPredMode = cu.m_lumaIntraDir[absPartIdx];
+@@ -350,8 +352,8 @@
+         initIntraNeighbors(cu, absPartIdx, tuDepth, true, &intraNeighbors);
+         initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
+ 
+-        // get prediction signal
+-        predIntraLumaAng(lumaPredMode, pred, stride, log2TrSize);
++        // get prediction signal (writes into pred)
++        predIntraLumaAng(lumaPredMode, pred, predStride, log2TrSize);
+ 
+         cu.setTransformSkipSubParts(0, TEXT_LUMA, absPartIdx, fullDepth);
+         cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
+@@ -362,25 +364,26 @@
+         // store original entropy coding status
+         if (bEnableRDOQ)
+             m_entropyCoder.estBit(m_entropyCoder.m_estBitsSbac, log2TrSize, true);
+-        primitives.cu[sizeIdx].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++        primitives.cu[sizeIdx].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++            fencStride, predStride, resiStride);
+ 
+-        uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeffY, log2TrSize, TEXT_LUMA, absPartIdx, false);
++        uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeffY, log2TrSize, TEXT_LUMA, absPartIdx, false);
+         if (numSig)
+         {
+-            m_quant.invtransformNxN(cu, residual, stride, coeffY, log2TrSize, TEXT_LUMA, true, false, numSig);
++            m_quant.invtransformNxN(cu, residual, resiStride, coeffY, log2TrSize, TEXT_LUMA, true, false, numSig);
+             bool reconQtYuvAlign = m_rqt[qtLayer].reconQtYuv.getAddrOffset(absPartIdx, mode.predYuv.m_size) % 64 == 0;
+             bool predAlign = mode.predYuv.getAddrOffset(absPartIdx, mode.predYuv.m_size) % 64 == 0;
+             bool residualAlign = m_rqt[cuGeom.depth].tmpResiYuv.getAddrOffset(absPartIdx, mode.predYuv.m_size) % 64 == 0;
+-            bool bufferAlignCheck = (reconQtStride % 64 == 0) && (stride % 64 == 0) && reconQtYuvAlign && predAlign && residualAlign;
+-            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](reconQt, reconQtStride, pred, residual, stride, stride);
++            bool bufferAlignCheck = (reconQtStride % 64 == 0) && (predStride % 64 == 0) && (resiStride % 64 == 0) && reconQtYuvAlign && predAlign && residualAlign;
++            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](reconQt, reconQtStride, pred, residual, predStride, resiStride);
+         }
+         else
+             // no coded residual, recon = pred
+-            primitives.cu[sizeIdx].copy_pp(reconQt, reconQtStride, pred, stride);
++            primitives.cu[sizeIdx].copy_pp(reconQt, reconQtStride, pred, predStride);
+ 
+         bCBF = !!numSig << tuDepth;
+         cu.setCbfSubParts(bCBF, TEXT_LUMA, absPartIdx, fullDepth);
+-        fullCost.distortion = primitives.cu[sizeIdx].sse_pp(reconQt, reconQtStride, fenc, stride);
++        fullCost.distortion = primitives.cu[sizeIdx].sse_pp(reconQt, reconQtStride, fenc, fencStride);
+ 
+         m_entropyCoder.resetBits();
+         if (!absPartIdx)
+@@ -426,12 +429,12 @@
+ 
+         if (m_rdCost.m_psyRd)
+         {
+-            fullCost.energy = m_rdCost.psyCost(sizeIdx, fenc, mode.fencYuv->m_size, reconQt, reconQtStride);
++            fullCost.energy = m_rdCost.psyCost(sizeIdx, fenc, fencStride, reconQt, reconQtStride);
+             fullCost.rdcost = m_rdCost.calcPsyRdCost(fullCost.distortion, fullCost.bits, fullCost.energy);
+         }
+         else if(m_rdCost.m_ssimRd)
+         {
+-            fullCost.energy = m_quant.ssimDistortion(cu, fenc, stride, reconQt, reconQtStride, log2TrSize, TEXT_LUMA, absPartIdx);
++            fullCost.energy = m_quant.ssimDistortion(cu, fenc, fencStride, reconQt, reconQtStride, log2TrSize, TEXT_LUMA, absPartIdx);
+             fullCost.rdcost = m_rdCost.calcSsimRdCost(fullCost.distortion, fullCost.bits, fullCost.energy);
+         }
+         else
+@@ -536,7 +539,9 @@
+     const pixel* fenc = fencYuv->getLumaAddr(absPartIdx);
+     pixel*   pred = predYuv->getLumaAddr(absPartIdx);
+     int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
+-    uint32_t stride = fencYuv->m_size;
++    uint32_t fencStride = fencYuv->m_size;
++    uint32_t predStride = predYuv->m_size;
++    uint32_t resiStride = m_rqt[cuGeom.depth].tmpResiYuv.m_size;
+     uint32_t sizeIdx = log2TrSize - 2;
+ 
+     // init availability pattern
+@@ -546,7 +551,7 @@
+     initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
+ 
+     // get prediction signal
+-    predIntraLumaAng(lumaPredMode, pred, stride, log2TrSize);
++    predIntraLumaAng(lumaPredMode, pred, predStride, log2TrSize);
+ 
+     cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
+ 
+@@ -573,16 +578,17 @@
+         bool tmpReconAlign = (useTSkip ? 1 : (m_rqt[qtLayer].reconQtYuv.getAddrOffset(absPartIdx, m_rqt[qtLayer].reconQtYuv.m_size) % 64 == 0));
+         uint32_t tmpReconStride = (useTSkip ? MAX_TS_SIZE : reconQtStride);
+ 
+-        primitives.cu[sizeIdx].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++        primitives.cu[sizeIdx].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++            fencStride, predStride, resiStride);
+ 
+-        uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeff, log2TrSize, TEXT_LUMA, absPartIdx, useTSkip);
++        uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeff, log2TrSize, TEXT_LUMA, absPartIdx, useTSkip);
+         if (numSig)
+         {
+-            m_quant.invtransformNxN(cu, residual, stride, coeff, log2TrSize, TEXT_LUMA, true, useTSkip, numSig);
++            m_quant.invtransformNxN(cu, residual, resiStride, coeff, log2TrSize, TEXT_LUMA, true, useTSkip, numSig);
+             bool residualAlign = m_rqt[cuGeom.depth].tmpResiYuv.getAddrOffset(absPartIdx, m_rqt[cuGeom.depth].tmpResiYuv.m_size) % 64 == 0;
+             bool predAlign = predYuv->getAddrOffset(absPartIdx, predYuv->m_size) % 64 == 0;
+-            bool bufferAlignCheck = (stride % 64 == 0) && (tmpReconStride % 64 == 0) && tmpReconAlign && residualAlign && predAlign;
+-            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](tmpRecon, tmpReconStride, pred, residual, stride, stride);
++            bool bufferAlignCheck = (predStride % 64 == 0) && (resiStride % 64 == 0) && (tmpReconStride % 64 == 0) && tmpReconAlign && residualAlign && predAlign;
++            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](tmpRecon, tmpReconStride, pred, residual, predStride, resiStride);
+         }
+         else if (useTSkip)
+         {
+@@ -592,9 +598,9 @@
+         }
+         else
+             // no residual coded, recon = pred
+-            primitives.cu[sizeIdx].copy_pp(tmpRecon, tmpReconStride, pred, stride);
++            primitives.cu[sizeIdx].copy_pp(tmpRecon, tmpReconStride, pred, predStride);
+ 
+-        sse_t tmpDist = primitives.cu[sizeIdx].sse_pp(tmpRecon, tmpReconStride, fenc, stride);
++        sse_t tmpDist = primitives.cu[sizeIdx].sse_pp(tmpRecon, tmpReconStride, fenc, fencStride);
+ 
+         cu.setTransformSkipSubParts(useTSkip, TEXT_LUMA, absPartIdx, fullDepth);
+         cu.setCbfSubParts((!!numSig) << tuDepth, TEXT_LUMA, absPartIdx, fullDepth);
+@@ -645,12 +651,12 @@
+ 
+         if (m_rdCost.m_psyRd)
+         {
+-            tmpEnergy = m_rdCost.psyCost(sizeIdx, fenc, fencYuv->m_size, tmpRecon, tmpReconStride);
++            tmpEnergy = m_rdCost.psyCost(sizeIdx, fenc, fencStride, tmpRecon, tmpReconStride);
+             tmpCost = m_rdCost.calcPsyRdCost(tmpDist, tmpBits, tmpEnergy);
+         }
+         else if(m_rdCost.m_ssimRd)
+         {
+-            tmpEnergy = m_quant.ssimDistortion(cu, fenc, stride, tmpRecon, tmpReconStride, log2TrSize, TEXT_LUMA, absPartIdx);
++            tmpEnergy = m_quant.ssimDistortion(cu, fenc, fencStride, tmpRecon, tmpReconStride, log2TrSize, TEXT_LUMA, absPartIdx);
+             tmpCost = m_rdCost.calcSsimRdCost(tmpDist, tmpBits, tmpEnergy);
+         }
+         else
+@@ -711,7 +717,9 @@
+         const pixel* fenc = mode.fencYuv->getLumaAddr(absPartIdx);
+         pixel*   pred     = mode.predYuv.getLumaAddr(absPartIdx);
+         int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
+-        uint32_t stride   = mode.fencYuv->m_size;
++        uint32_t fencStride = mode.fencYuv->m_size;
++        uint32_t predStride = mode.predYuv.m_size;
++        uint32_t resiStride = m_rqt[cuGeom.depth].tmpResiYuv.m_size;
+ 
+         // init availability pattern
+         uint32_t lumaPredMode = cu.m_lumaIntraDir[absPartIdx];
+@@ -720,7 +728,7 @@
+         initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
+ 
+         // get prediction signal
+-        predIntraLumaAng(lumaPredMode, pred, stride, log2TrSize);
++        predIntraLumaAng(lumaPredMode, pred, predStride, log2TrSize);
+ 
+         X265_CHECK(!cu.m_transformSkip[TEXT_LUMA][absPartIdx], "unexpected tskip flag in residualTransformQuantIntra\n");
+         cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
+@@ -729,26 +737,27 @@
+         coeff_t* coeffY       = cu.m_trCoeff[0] + coeffOffsetY;
+ 
+         uint32_t sizeIdx   = log2TrSize - 2;
+-        primitives.cu[sizeIdx].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++        primitives.cu[sizeIdx].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++            fencStride, predStride, resiStride);
+ 
+         PicYuv*  reconPic = m_frame->m_reconPic[0];
+         pixel*   picReconY = reconPic->getLumaAddr(cu.m_cuAddr, cuGeom.absPartIdx + absPartIdx);
+         intptr_t picStride = reconPic->m_stride;
+ 
+-        uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeffY, log2TrSize, TEXT_LUMA, absPartIdx, false);
++        uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeffY, log2TrSize, TEXT_LUMA, absPartIdx, false);
+         if (numSig)
+         {
+-            m_quant.invtransformNxN(cu, residual, stride, coeffY, log2TrSize, TEXT_LUMA, true, false, numSig);
++            m_quant.invtransformNxN(cu, residual, resiStride, coeffY, log2TrSize, TEXT_LUMA, true, false, numSig);
+             bool picReconYAlign = (reconPic->m_cuOffsetY[cu.m_cuAddr] + reconPic->m_buOffsetY[cuGeom.absPartIdx + absPartIdx]) % 64 == 0;
+             bool predAlign = mode.predYuv.getAddrOffset(absPartIdx, mode.predYuv.m_size) % 64 == 0;
+             bool residualAlign = m_rqt[cuGeom.depth].tmpResiYuv.getAddrOffset(absPartIdx, m_rqt[cuGeom.depth].tmpResiYuv.m_size)% 64 == 0;
+-            bool bufferAlignCheck = (picStride % 64 == 0) && (stride % 64 == 0) && picReconYAlign && predAlign && residualAlign;
+-            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](picReconY, picStride, pred, residual, stride, stride);
++            bool bufferAlignCheck = (picStride % 64 == 0) && (predStride % 64 == 0) && (resiStride % 64 == 0) && picReconYAlign && predAlign && residualAlign;
++            primitives.cu[sizeIdx].add_ps[bufferAlignCheck](picReconY, picStride, pred, residual, predStride, resiStride);
+             cu.setCbfSubParts(1 << tuDepth, TEXT_LUMA, absPartIdx, fullDepth);
+         }
+         else
+         {
+-            primitives.cu[sizeIdx].copy_pp(picReconY, picStride, pred, stride);
++            primitives.cu[sizeIdx].copy_pp(picReconY, picStride, pred, predStride);
+             cu.setCbfSubParts(0, TEXT_LUMA, absPartIdx, fullDepth);
+         }
+     }
+@@ -870,7 +879,9 @@
+ 
+     ShortYuv& resiYuv = m_rqt[cuGeom.depth].tmpResiYuv;
+     uint32_t qtLayer = log2TrSize - 2;
+-    uint32_t stride = mode.fencYuv->m_csize;
++    uint32_t fencStride = mode.fencYuv->m_csize;
++    uint32_t predStride = mode.predYuv.m_csize;
++    uint32_t resiStride = resiYuv.m_csize;
+     const uint32_t sizeIdxC = log2TrSizeC - 2;
+ 
+     uint32_t curPartNum = cuGeom.numPartitions >> tuDepthC * 2;
+@@ -909,35 +920,36 @@
+             initAdiPatternChroma(cu, cuGeom, absPartIdxC, intraNeighbors, chromaId);
+ 
+             // get prediction signal
+-            predIntraChromaAng(chromaPredMode, pred, stride, log2TrSizeC);
++            predIntraChromaAng(chromaPredMode, pred, predStride, log2TrSizeC);
+             cu.setTransformSkipPartRange(0, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+ 
+-            primitives.cu[sizeIdxC].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++            primitives.cu[sizeIdxC].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++                fencStride, predStride, resiStride);
+ 
+-            uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeffC, log2TrSizeC, ttype, absPartIdxC, false);
++            uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeffC, log2TrSizeC, ttype, absPartIdxC, false);
+             if (numSig)
+             {
+-                m_quant.invtransformNxN(cu, residual, stride, coeffC, log2TrSizeC, ttype, true, false, numSig);
++                m_quant.invtransformNxN(cu, residual, resiStride, coeffC, log2TrSizeC, ttype, true, false, numSig);
+                 bool reconQtAlign = m_rqt[qtLayer].reconQtYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+                 bool predAlign = mode.predYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+                 bool residualAlign = resiYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+-                bool bufferAlignCheck = reconQtAlign && predAlign && residualAlign && (reconQtStride % 64 == 0) && (stride % 64 == 0);
+-                primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](reconQt, reconQtStride, pred, residual, stride, stride);
++                bool bufferAlignCheck = reconQtAlign && predAlign && residualAlign && (reconQtStride % 64 == 0) && (predStride % 64 == 0) && (resiStride % 64 == 0);
++                primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](reconQt, reconQtStride, pred, residual, predStride, resiStride);
+                 cu.setCbfPartRange(1 << tuDepth, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+             }
+             else
+             {
+                 // no coded residual, recon = pred
+-                primitives.cu[sizeIdxC].copy_pp(reconQt, reconQtStride, pred, stride);
++                primitives.cu[sizeIdxC].copy_pp(reconQt, reconQtStride, pred, predStride);
+                 cu.setCbfPartRange(0, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+             }
+ 
+-            outCost.distortion += m_rdCost.scaleChromaDist(chromaId, primitives.cu[sizeIdxC].sse_pp(reconQt, reconQtStride, fenc, stride));
++            outCost.distortion += m_rdCost.scaleChromaDist(chromaId, primitives.cu[sizeIdxC].sse_pp(reconQt, reconQtStride, fenc, fencStride));
+ 
+             if (m_rdCost.m_psyRd)
+-                outCost.energy += m_rdCost.psyCost(sizeIdxC, fenc, stride, reconQt, reconQtStride);
++                outCost.energy += m_rdCost.psyCost(sizeIdxC, fenc, fencStride, reconQt, reconQtStride);
+             else if(m_rdCost.m_ssimRd)
+-                outCost.energy += m_quant.ssimDistortion(cu, fenc, stride, reconQt, reconQtStride, log2TrSizeC, ttype, absPartIdxC);
++                outCost.energy += m_quant.ssimDistortion(cu, fenc, fencStride, reconQt, reconQtStride, log2TrSizeC, ttype, absPartIdxC);
+ 
+             primitives.cu[sizeIdxC].copy_pp(picReconC, picStride, reconQt, reconQtStride);
+         }
+@@ -983,7 +995,9 @@
+             const pixel* fenc = mode.fencYuv->getChromaAddr(chromaId, absPartIdxC);
+             pixel*   pred = mode.predYuv.getChromaAddr(chromaId, absPartIdxC);
+             int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getChromaAddr(chromaId, absPartIdxC);
+-            uint32_t stride = mode.fencYuv->m_csize;
++            uint32_t fencStride = mode.fencYuv->m_csize;
++            uint32_t predStride = mode.predYuv.m_csize;
++            uint32_t resiStride = m_rqt[cuGeom.depth].tmpResiYuv.m_csize;
+             const uint32_t sizeIdxC = log2TrSizeC - 2;
+ 
+             uint32_t coeffOffsetC = absPartIdxC << (LOG2_UNIT_SIZE * 2 - (m_hChromaShift + m_vChromaShift));
+@@ -1001,7 +1015,7 @@
+                 chromaPredMode = g_chroma422IntraAngleMappingTable[chromaPredMode];
+ 
+             // get prediction signal
+-            predIntraChromaAng(chromaPredMode, pred, stride, log2TrSizeC);
++            predIntraChromaAng(chromaPredMode, pred, predStride, log2TrSizeC);
+ 
+             uint64_t bCost = MAX_INT64;
+             sse_t bDist = 0;
+@@ -1016,17 +1030,18 @@
+                 pixel*   recon = (useTSkip ? m_tsRecon : reconQt);
+                 uint32_t reconStride = (useTSkip ? MAX_TS_SIZE : reconQtStride);
+ 
+-                primitives.cu[sizeIdxC].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++                primitives.cu[sizeIdxC].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++                    fencStride, predStride, resiStride);
+ 
+-                uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeff, log2TrSizeC, ttype, absPartIdxC, useTSkip);
++                uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeff, log2TrSizeC, ttype, absPartIdxC, useTSkip);
+                 if (numSig)
+                 {
+-                    m_quant.invtransformNxN(cu, residual, stride, coeff, log2TrSizeC, ttype, true, useTSkip, numSig);
++                    m_quant.invtransformNxN(cu, residual, resiStride, coeff, log2TrSizeC, ttype, true, useTSkip, numSig);
+                     bool reconAlign = (useTSkip ? 1 : m_rqt[qtLayer].reconQtYuv.getChromaAddrOffset(absPartIdxC)) % 64 == 0;
+                     bool predYuvAlign = mode.predYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+                     bool residualAlign = m_rqt[cuGeom.depth].tmpResiYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+-                    bool bufferAlignCheck = reconAlign && predYuvAlign && residualAlign && (reconStride % 64 == 0) && (stride % 64 == 0);
+-                    primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](recon, reconStride, pred, residual, stride, stride);
++                    bool bufferAlignCheck = reconAlign && predYuvAlign && residualAlign && (reconStride % 64 == 0) && (predStride % 64 == 0) && (resiStride % 64 == 0);
++                    primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](recon, reconStride, pred, residual, predStride, resiStride);
+                     cu.setCbfPartRange(1 << tuDepth, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+                 }
+                 else if (useTSkip)
+@@ -1036,10 +1051,10 @@
+                 }
+                 else
+                 {
+-                    primitives.cu[sizeIdxC].copy_pp(recon, reconStride, pred, stride);
++                    primitives.cu[sizeIdxC].copy_pp(recon, reconStride, pred, predStride);
+                     cu.setCbfPartRange(0, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+                 }
+-                sse_t tmpDist = primitives.cu[sizeIdxC].sse_pp(recon, reconStride, fenc, stride);
++                sse_t tmpDist = primitives.cu[sizeIdxC].sse_pp(recon, reconStride, fenc, fencStride);
+                 tmpDist = m_rdCost.scaleChromaDist(chromaId, tmpDist);
+ 
+                 cu.setTransformSkipPartRange(useTSkip, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+@@ -1056,12 +1071,12 @@
+                 uint64_t tmpCost;
+                 if (m_rdCost.m_psyRd)
+                 {
+-                    tmpEnergy = m_rdCost.psyCost(sizeIdxC, fenc, stride, reconQt, reconQtStride);
++                    tmpEnergy = m_rdCost.psyCost(sizeIdxC, fenc, fencStride, reconQt, reconQtStride);
+                     tmpCost = m_rdCost.calcPsyRdCost(tmpDist, tmpBits, tmpEnergy);
+                 }
+                 else if(m_rdCost.m_ssimRd)
+                 {
+-                    tmpEnergy = m_quant.ssimDistortion(cu, fenc, stride, reconQt, reconQtStride, log2TrSizeC, ttype, absPartIdxC);
++                    tmpEnergy = m_quant.ssimDistortion(cu, fenc, fencStride, reconQt, reconQtStride, log2TrSizeC, ttype, absPartIdxC);
+                     tmpCost = m_rdCost.calcSsimRdCost(tmpDist, tmpBits, tmpEnergy);
+                 }
+                 else
+@@ -1170,7 +1185,9 @@
+     }
+ 
+     ShortYuv& resiYuv = m_rqt[cuGeom.depth].tmpResiYuv;
+-    uint32_t stride = mode.fencYuv->m_csize;
++    uint32_t fencStride = mode.fencYuv->m_csize;
++    uint32_t predStride = mode.predYuv.m_csize;
++    uint32_t resiStride = resiYuv.m_csize;
+     const uint32_t sizeIdxC = log2TrSizeC - 2;
+ 
+     uint32_t curPartNum = cuGeom.numPartitions >> tuDepthC * 2;
+@@ -1207,27 +1224,28 @@
+             initAdiPatternChroma(cu, cuGeom, absPartIdxC, intraNeighbors, chromaId);
+ 
+             // get prediction signal
+-            predIntraChromaAng(chromaPredMode, pred, stride, log2TrSizeC);
++            predIntraChromaAng(chromaPredMode, pred, predStride, log2TrSizeC);
+ 
+             X265_CHECK(!cu.m_transformSkip[ttype][0], "transform skip not supported at low RD levels\n");
+ 
+-            primitives.cu[sizeIdxC].calcresidual[stride % 64 == 0](fenc, pred, residual, stride);
++            primitives.cu[sizeIdxC].calcresidual[fencStride % 64 == 0](fenc, pred, residual,
++                fencStride, predStride, resiStride);
+ 
+-            uint32_t numSig = m_quant.transformNxN(cu, fenc, stride, residual, stride, coeffC, log2TrSizeC, ttype, absPartIdxC, false);
++            uint32_t numSig = m_quant.transformNxN(cu, fenc, fencStride, residual, resiStride, coeffC, log2TrSizeC, ttype, absPartIdxC, false);
+             if (numSig)
+             {
+-                m_quant.invtransformNxN(cu, residual, stride, coeffC, log2TrSizeC, ttype, true, false, numSig);
++                m_quant.invtransformNxN(cu, residual, resiStride, coeffC, log2TrSizeC, ttype, true, false, numSig);
+                 bool picReconCAlign = (reconPic->m_cuOffsetC[cu.m_cuAddr] + reconPic->m_buOffsetC[cuGeom.absPartIdx + absPartIdxC]) % 64 == 0;
+                 bool predAlign = mode.predYuv.getChromaAddrOffset(absPartIdxC) % 64 == 0;
+                 bool residualAlign = resiYuv.getChromaAddrOffset(absPartIdxC)% 64 == 0;
+-                bool bufferAlignCheck = picReconCAlign && predAlign && residualAlign && (picStride % 64 == 0) && (stride % 64 == 0);
+-                primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](picReconC, picStride, pred, residual, stride, stride);
++                bool bufferAlignCheck = picReconCAlign && predAlign && residualAlign && (picStride % 64 == 0) && (predStride % 64 == 0) && (resiStride % 64 == 0);
++                primitives.cu[sizeIdxC].add_ps[bufferAlignCheck](picReconC, picStride, pred, residual, predStride, resiStride);
+                 cu.setCbfPartRange(1 << tuDepth, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+             }
+             else
+             {
+                 // no coded residual, recon = pred
+-                primitives.cu[sizeIdxC].copy_pp(picReconC, picStride, pred, stride);
++                primitives.cu[sizeIdxC].copy_pp(picReconC, picStride, pred, predStride);
+                 cu.setCbfPartRange(0, ttype, absPartIdxC, tuIterator.absPartIdxStep);
+             }
+         }
+@@ -1322,7 +1340,7 @@
+     initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, ALL_IDX);
+ 
+     const pixel* fenc = intraMode.fencYuv->m_buf[0];
+-    uint32_t stride = intraMode.fencYuv->m_size;
++    uint32_t fencStride = intraMode.fencYuv->m_size;
+ 
+     int sad, bsad;
+     uint32_t bits, bbits, mode, bmode;
+@@ -1330,14 +1348,14 @@
+ 
+     // 33 Angle modes once
+     int scaleTuSize = tuSize;
+-    int scaleStride = stride;
++    int scaleStride = fencStride;
+     int costShift = 0;
+     int sizeIdx = log2TrSize - 2;
+ 
+     if (tuSize > 32)
+     {
+         // CU is 64x64, we scale to 32x32 and adjust required parameters
+-        primitives.scale2D_64to32(m_fencScaled, fenc, stride);
++        primitives.scale2D_64to32(m_fencScaled, fenc, fencStride);
+         fenc = m_fencScaled;
+ 
+         pixel nScale[129];
+@@ -1368,8 +1386,13 @@
+     uint32_t rbits = getIntraRemModeBits(cu, absPartIdx, mpmModes, mpms);
+ 
+     // DC
+-    primitives.cu[sizeIdx].intra_pred[DC_IDX](m_intraPredAngs, scaleStride, intraNeighbourBuf[0], 0, (scaleTuSize <= 16));
+-    bsad = sa8d(fenc, scaleStride, m_intraPredAngs, scaleStride) << costShift;
++    /* Phase 4 (2026-07-01): write DC and PLANAR into m_intraPredAngs at the
++     * tight scaleTuSize stride instead of the fenc-inherited scaleStride
++     * (which under Phase 1 view is picStride ≈ 2016, scattering a 16x16 write
++     * across 16 disjoint cache lines).  Bit-safe — sa8d sees the same pixels
++     * either way, just laid out contiguously in the scratch buffer. */
++    primitives.cu[sizeIdx].intra_pred[DC_IDX](m_intraPredAngs, scaleTuSize, intraNeighbourBuf[0], 0, (scaleTuSize <= 16));
++    bsad = sa8d(fenc, scaleStride, m_intraPredAngs, scaleTuSize) << costShift;
+     bmode = mode = DC_IDX;
+     bbits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
+     bcost = m_rdCost.calcRdSADCost(bsad, bbits);
+@@ -1379,8 +1402,8 @@
+     if (tuSize & (8 | 16 | 32))
+         planar = intraNeighbourBuf[1];
+ 
+-    primitives.cu[sizeIdx].intra_pred[PLANAR_IDX](m_intraPredAngs, scaleStride, planar, 0, 0);
+-    sad = sa8d(fenc, scaleStride, m_intraPredAngs, scaleStride) << costShift;
++    primitives.cu[sizeIdx].intra_pred[PLANAR_IDX](m_intraPredAngs, scaleTuSize, planar, 0, 0);
++    sad = sa8d(fenc, scaleStride, m_intraPredAngs, scaleTuSize) << costShift;
+     mode = PLANAR_IDX;
+     bits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
+     cost = m_rdCost.calcRdSADCost(sad, bits);
+@@ -1562,10 +1585,12 @@
+ 
+                 // determine set of modes to be tested (using prediction signal only)
+                 const pixel* fenc = fencYuv->getLumaAddr(absPartIdx);
+-                uint32_t stride = predYuv->m_size;
++                uint32_t fencStride = fencYuv->m_size;
++                uint32_t predStride = predYuv->m_size;
+ 
+                 int scaleTuSize = tuSize;
+-                int scaleStride = stride;
++                int scaleFencStride = fencStride;
++                int scaleStride = predStride;
+                 int costShift = 0;
+ 
+                 m_entropyCoder.loadIntraDirModeLuma(m_rqt[depth].cur);
+@@ -1582,9 +1607,12 @@
+                 uint64_t modeCosts[35];
+ 
+                 // DC
+-                primitives.cu[sizeIdx].intra_pred[DC_IDX](m_intraPred, scaleStride, intraNeighbourBuf[0], 0, (scaleTuSize <= 16));
++                /* Phase 4 (2026-07-01): write DC/PLANAR to m_intraPred at the
++                 * tight scaleTuSize stride (matches the TRY_ANGLE path below).
++                 * Bit-safe — sa8d sees the same pixels either way. */
++                primitives.cu[sizeIdx].intra_pred[DC_IDX](m_intraPred, scaleTuSize, intraNeighbourBuf[0], 0, (scaleTuSize <= 16));
+                 uint32_t bits = (mpms & ((uint64_t)1 << DC_IDX)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, DC_IDX) : rbits;
+-                uint32_t sad = sa8d(fenc, scaleStride, m_intraPred, scaleStride) << costShift;
++                uint32_t sad = sa8d(fenc, scaleFencStride, m_intraPred, scaleTuSize) << costShift;
+                 modeCosts[DC_IDX] = bcost = m_rdCost.calcRdSADCost(sad, bits);
+ 
+                 // PLANAR
+@@ -1592,16 +1620,16 @@
+                 if (tuSize >= 8 && tuSize <= 32)
+                     planar = intraNeighbourBuf[1];
+ 
+-                primitives.cu[sizeIdx].intra_pred[PLANAR_IDX](m_intraPred, scaleStride, planar, 0, 0);
++                primitives.cu[sizeIdx].intra_pred[PLANAR_IDX](m_intraPred, scaleTuSize, planar, 0, 0);
+                 bits = (mpms & ((uint64_t)1 << PLANAR_IDX)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, PLANAR_IDX) : rbits;
+-                sad = sa8d(fenc, scaleStride, m_intraPred, scaleStride) << costShift;
++                sad = sa8d(fenc, scaleFencStride, m_intraPred, scaleTuSize) << costShift;
+                 modeCosts[PLANAR_IDX] = m_rdCost.calcRdSADCost(sad, bits);
+                 COPY1_IF_LT(bcost, modeCosts[PLANAR_IDX]);
+ 
+                 // angular predictions
+                 if (primitives.cu[sizeIdx].intra_pred_allangs)
+                 {
+-                    primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleStride);
++                    primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleFencStride);
+                     primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16));
+                     for (int mode = 2; mode < 35; mode++)
+                     {
+@@ -1609,7 +1637,7 @@
+                         if (mode < 18)
+                             sad = sa8d(m_fencTransposed, scaleTuSize, &m_intraPredAngs[(mode - 2) * (scaleTuSize * scaleTuSize)], scaleTuSize) << costShift;
+                         else
+-                            sad = sa8d(fenc, scaleStride, &m_intraPredAngs[(mode - 2) * (scaleTuSize * scaleTuSize)], scaleTuSize) << costShift;
++                            sad = sa8d(fenc, scaleFencStride, &m_intraPredAngs[(mode - 2) * (scaleTuSize * scaleTuSize)], scaleTuSize) << costShift;
+                         modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
+                         COPY1_IF_LT(bcost, modeCosts[mode]);
+                     }
+@@ -1621,7 +1649,7 @@
+                         bits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
+                         int filter = !!(g_intraFilterFlags[mode] & scaleTuSize);
+                         primitives.cu[sizeIdx].intra_pred[mode](m_intraPred, scaleTuSize, intraNeighbourBuf[filter], mode, scaleTuSize <= 16);
+-                        sad = sa8d(fenc, scaleStride, m_intraPred, scaleTuSize) << costShift;
++                        sad = sa8d(fenc, scaleFencStride, m_intraPred, scaleTuSize) << costShift;
+                         modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
+                         COPY1_IF_LT(bcost, modeCosts[mode]);
+                     }
+@@ -1749,9 +1777,9 @@
+             const pixel* fenc = fencYuv->m_buf[chromaId];
+             pixel* pred = predYuv->m_buf[chromaId];
+             Predict::initAdiPatternChroma(cu, cuGeom, 0, intraNeighbors, chromaId);
+-            // get prediction signal
+-            predIntraChromaAng(chromaPredMode, pred, fencYuv->m_csize, log2TrSizeC);
+-            cost += primitives.cu[log2TrSizeC - 2].sa8d(fenc, predYuv->m_csize, pred, fencYuv->m_csize) << costShift;
++            // get prediction signal — pred writes go with pred's stride
++            predIntraChromaAng(chromaPredMode, pred, predYuv->m_csize, log2TrSizeC);
++            cost += primitives.cu[log2TrSizeC - 2].sa8d(fenc, fencYuv->m_csize, pred, predYuv->m_csize) << costShift;
+         }
+ 
+         if (cost < bestCost)
+@@ -4593,6 +4621,10 @@
+     cu.clearCbf();
+     cu.setTUDepthSubParts(0, 0, depth);
+ 
++    /* Kept as a deep-copy: callers of encodeResAndCalcRdSkipCU (e.g.
++     * checkMerge2Nx2N_rd0_4 at analysis.cpp:3242) subsequently read
++     * interMode.predYuv, so we cannot swap it out here without
++     * cascading changes. */
+     reconYuv->copyFromYuv(interMode.predYuv);
+ 
+     // Luma
+@@ -4682,8 +4714,8 @@
+         sse_t cbf0Dist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
+         if (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400)
+         {
+-            cbf0Dist += m_rdCost.scaleChromaDist(1, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[1], predYuv->m_csize, predYuv->m_buf[1], predYuv->m_csize));
+-            cbf0Dist += m_rdCost.scaleChromaDist(2, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[2], predYuv->m_csize, predYuv->m_buf[2], predYuv->m_csize));
++            cbf0Dist += m_rdCost.scaleChromaDist(1, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[1], fencYuv->m_csize, predYuv->m_buf[1], predYuv->m_csize));
++            cbf0Dist += m_rdCost.scaleChromaDist(2, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[2], fencYuv->m_csize, predYuv->m_buf[2], predYuv->m_csize));
+         }
+ 
+         /* Consider the RD cost of not signaling any residual */
+@@ -4754,10 +4786,17 @@
+ 
+     m_entropyCoder.store(interMode.contexts);
+ 
++    /* Phase 2 pointer-swap: on the cbf=0 branch reconYuv used to deep-copy
++     * predYuv's content byte-for-byte. Instead move the buffer pointer with
++     * adoptFrom(). predYuv is depopulated by the swap, so the resEnergy
++     * calculation (SSE of fenc against pred) has to run first, while pred
++     * still holds its motion-compensated content. */
++    interMode.resEnergy = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
++
+     if (cu.getQtRootCbf(0))
+         reconYuv->addClip(*predYuv, *resiYuv, log2CUSize, m_frame->m_fencPic->m_picCsp);
+     else
+-        reconYuv->copyFromYuv(*predYuv);
++        reconYuv->adoptFrom(*predYuv);
+ 
+     // update with clipped distortion and cost (qp estimation loop uses unclipped values)
+     sse_t bestLumaDist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size);
+@@ -4774,7 +4813,6 @@
+     else if(m_rdCost.m_ssimRd)
+         interMode.ssimEnergy = m_quant.ssimDistortion(cu, fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size, cu.m_log2CUSize[0], TEXT_LUMA, 0);
+ 
+-    interMode.resEnergy = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
+     interMode.totalBits = bits;
+     interMode.lumaDistortion = bestLumaDist;
+     interMode.coeffBits = coeffBits;
