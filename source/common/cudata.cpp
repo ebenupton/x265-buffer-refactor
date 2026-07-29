@@ -629,6 +629,17 @@ void CUData::copyToPic(uint32_t depth) const
     uint32_t tmpY = 1 << ((m_slice->m_param->maxLog2CUSize - depth) * 2);
     uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);
 
+    /* Phase 11: the picture CTU's coefficients are only ever read under a cbf
+     * check (Entropy::codeCoeffNxN via getCbf; copyFromPic never reads them),
+     * so planes with no coded residual anywhere in this CU need not be
+     * committed.  Skip-heavy encodes drop most of the coeff traffic. */
+    bool cbfY = false, cbfC = false;
+    for (uint32_t i = 0; i < m_numPartitions; i++)
+        cbfY |= m_cbf[0][i] != 0;
+    if (ctu.m_chromaFormat != X265_CSP_I400)
+        for (uint32_t i = 0; i < m_numPartitions; i++)
+            cbfC |= (m_cbf[1][i] | m_cbf[2][i]) != 0;
+
     /* Phase 6b: coeff planes are contiguous in trCoeffMemBlock at offsets 0
      * (Y), sizeL (Cb), sizeL+sizeC (Cr).  At a full-CTU commit the three
      * separate memcpys collapse to one. */
@@ -636,12 +647,18 @@ void CUData::copyToPic(uint32_t depth) const
         m_hChromaShift == ctu.m_hChromaShift && m_vChromaShift == ctu.m_vChromaShift)
     {
         uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
-        memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
+        if (cbfY && cbfC)
+            memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
+        else if (cbfY)
+            memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * tmpY);
+        else if (cbfC)
+            memcpy(ctu.m_trCoeff[1], m_trCoeff[1], sizeof(coeff_t) * 2 * tmpC);
     }
     else
     {
-        memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
-        if (ctu.m_chromaFormat != X265_CSP_I400)
+        if (cbfY)
+            memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
+        if (ctu.m_chromaFormat != X265_CSP_I400 && cbfC)
         {
             uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
             uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
