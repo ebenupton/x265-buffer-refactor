@@ -13,6 +13,7 @@ Buffer-flow refactor of the [x265](https://bitbucket.org/multicoreware/x265_git)
 | top-func plumbing time (`memcpy` + `blockcopy_pp_*` + `memset`) | **−2.9 pp** self-time |
 | + Phases 8–10 (ingest rework), 1t 5 Mbps LL | additional **−4.6 %** cycles |
 | + Phases 8–10, 4t 5 Mbps realtime | additional **−5.8 %** cycles, 29.3 → **31.4 fps** |
+| + Phase 11 (cbf-gated coeff commit), 1t 5 Mbps LL | additional **−1.4 %** cycles |
 | + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 % / −2.1 %** cycles |
 
 ### Data-movement parity with x264
@@ -27,12 +28,15 @@ primitives only):
 |---|---|
 | x264 (reference) | 8.5 G |
 | x265, before Phase 8 | 19.2 G |
-| x265, after Phase 10 | **9.1 G** |
+| x265, after Phase 10 | 9.1 G |
+| x265, after Phase 11 | **7.8 G** |
 
-The remaining ~0.6 G gap is dominated by CTU-commit copies that x264 pays in
-equivalent form. Frame ingest is now *cheaper* than x264's: zero user-space
-copies from disk to encode (x264 spends ~2.9 G in `plane_copy`), because
-`readv()` scatters file rows directly into encoder-geometry buffers (Phase 10).
+**Target met and exceeded**: x265 now moves *less* empty data than x264 on
+this workload. The remaining copies are matched by x264 equivalents
+(full-pel MC block fetch, entropy context save/restore, MB/CU commit).
+Frame ingest is also *cheaper* than x264's: zero user-space copies from disk
+to encode (x264 spends ~2.9 G in `plane_copy`), because `readv()` scatters
+file rows directly into encoder-geometry buffers (Phase 10).
 
 The refactor also uncovered and fixed three upstream stride bugs in
 `getBestIntraModeChroma`, `checkIntraInInter` and `cbf0Dist` chroma paths.
@@ -56,6 +60,7 @@ The refactor also uncovered and fixed three upstream stride bugs in
 | `01009e5` | Phase 8 — skip pic-CTU per-part init in plain encodes |
 | `77d15cc` | Phase 9 — zero-copy CLI frame ingest (encoder reads the file thread's ring buffer in place) |
 | `aeb83c3` | Phase 10 — direct ingest: the CLI lays its ring slots out in fenc geometry and `readv()` scatters packed file rows straight into strided position; the encoder aliases the slots via x265's dormant `bCopyPicToFrame=0` path, eliminating `copyFromPicture` entirely |
+| `eb05229` | Phase 11 — skip cbf-0 coefficient planes at `CUData::copyToPic` commit (768B of the ~1.5KB per-commit traffic, paid even for skip CUs; coeffs are only ever read under cbf gates) |
 
 See `docs/refactor/MEMORY-REFACTOR-PLAN.md` for the plan-of-record; individual investigation memos capture the reasoning at each fork.
 
