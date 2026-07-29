@@ -295,23 +295,45 @@ void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t first
     m_lastIntraBCMv[1].set(0, 0);
 #endif
 
-    /* sequential memsets */
+    /* In a plain encode nothing reads the pic-CTU per-part block before the
+     * full-CTU commit (copyToPic) overwrites all of it: every consumer of a
+     * pre-commit read (bAlreadyDecided sentinel, bDecidedDepth, bCtuInfoCheck,
+     * qprdRefine, refine/multi-pass paths) is gated on one of the features
+     * below, and out-of-picture children are zeroed explicitly in the split
+     * loops. Skipping the init here removes a full double-write of the
+     * ~BytesPerPartition*numPartitions block per CTU. The one exception is
+     * m_qp: topSkipMinDepth() reads parentCTU.m_qp[0] pre-commit, so it is
+     * kept unconditional. */
+    const x265_param* iparam = frame.m_encData->m_param;
     m_partSet((uint8_t*)m_qp, (uint8_t)qp);
-    m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
-    m_partSet(m_log2CUSize,   (uint8_t)m_slice->m_param->maxLog2CUSize);
-    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
-    m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
-    m_partSet(m_tqBypass,     (uint8_t)frame.m_encData->m_param->bLossless);
-    if (m_slice->m_sliceType != I_SLICE)
+    bool bNeedPartInit = iparam->analysisLoad[0] || iparam->analysisSave[0] ||
+        iparam->bAnalysisType != DEFAULT || iparam->bCTUInfo ||
+        /* mvRefine defaults to 1 but is only consumed under analysisLoad/
+         * interRefine gates, so it must not force the init on its own */
+        iparam->intraRefine || iparam->interRefine ||
+        iparam->bDynamicRefine ||
+        iparam->analysisMultiPassRefine || iparam->analysisMultiPassDistortion ||
+        iparam->bEnableRdRefine || iparam->bOptCUDeltaQP;
+
+    if (bNeedPartInit)
     {
-        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
-        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
+        /* sequential memsets */
+        m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
+        m_partSet(m_log2CUSize,   (uint8_t)m_slice->m_param->maxLog2CUSize);
+        m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
+        m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
+        m_partSet(m_tqBypass,     (uint8_t)frame.m_encData->m_param->bLossless);
+        if (m_slice->m_sliceType != I_SLICE)
+        {
+            m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
+            m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
+        }
+
+        /* initialize the remaining CU data in one memset */
+        memset(m_cuDepth, 0, (frame.m_param->internalCsp == X265_CSP_I400 ? BytesPerPartition - 12 : BytesPerPartition - 8) * m_numPartitions);
     }
 
     X265_CHECK(!(frame.m_encData->m_param->bLossless && !m_slice->m_pps->bTransquantBypassEnabled), "lossless enabled without TQbypass in PPS\n");
-
-    /* initialize the remaining CU data in one memset */
-    memset(m_cuDepth, 0, (frame.m_param->internalCsp == X265_CSP_I400 ? BytesPerPartition - 12 : BytesPerPartition - 8) * m_numPartitions);
 
     for (int8_t i = 0; i < NUM_TU_DEPTH; i++)
         m_refTuDepth[i] = -1;
