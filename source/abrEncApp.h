@@ -78,6 +78,7 @@ namespace X265_NS {
         Reader *m_reader;
         Scaler *m_scaler;
         bool m_inputOver;
+        bool m_inputZeroCopy;
 
         int m_threadActive;
         int m_lastIdx;

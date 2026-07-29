@@ -177,7 +177,10 @@ namespace X265_NS {
             {
                 for (uint32_t index = 0; index < m_queueSize; index++)
                 {
-                    X265_FREE(m_inputPicBuffer[pass][index]->planes[0]);
+                    /* in zero-copy mode planes[0] aliases the input reader's
+                     * ring buffer, which the reader owns and frees */
+                    if (!m_passEnc[pass]->m_inputZeroCopy)
+                        X265_FREE(m_inputPicBuffer[pass][index]->planes[0]);
                     x265_picture_free(m_inputPicBuffer[pass][index]);
                     x265_free_analysis_data(&m_param[pass], &m_analysisBuffer[pass][index]);
                 }
@@ -223,6 +226,7 @@ namespace X265_NS {
         }
         m_param = cliopt.param;
         m_inputOver = false;
+        m_inputZeroCopy = false;
         m_lastIdx = -1;
         m_encoder = NULL;
         m_scaler = NULL;
@@ -236,7 +240,18 @@ namespace X265_NS {
             setReuseLevel();
                 
         if (!(m_cliopt.enableScaler && m_id))
+        {
             m_reader = new Reader(m_id, this);
+            /* single encode, single view/layer, no field splitting, no scaler:
+             * the input picture is fully consumed (copied) inside each
+             * encoder_encode() call, so the reader's ring slot can be handed
+             * to the encoder by pointer and released after the encode call
+             * instead of being memcpy'd into the inter-thread picture queue */
+            m_inputZeroCopy = m_parent->m_numEncodes == 1 && m_param->numViews == 1 &&
+                !m_param->format && m_param->numScalableLayers <= 1 &&
+                !m_param->bField && !m_cliopt.enableScaler &&
+                m_input[0]->enableZeroCopy();
+        }
         else
         {
             VideoDesc *src = NULL, *dst = NULL;
@@ -807,6 +822,8 @@ ret:
                     int idx = (inFrameCount - 1) % m_parent->m_queueSize;
                     m_parent->m_picIdxReadCnt[m_id][idx].incr();
                     m_parent->m_picReadCnt[m_id].incr();
+                    if (m_inputZeroCopy && picInput)
+                        m_input[0]->releaseFrame();
                     if (m_cliopt.loadLevel && picInput)
                     {
                         m_parent->m_analysisReadCnt[m_cliopt.refId].incr();
@@ -1189,6 +1206,17 @@ ret:
                     dest->stride[2] = src->stride[2];
                     dest->format = src->format;
 
+                    if (m_parentEnc->m_inputZeroCopy)
+                    {
+                        /* hand the input reader's ring slot to the encoder by
+                         * pointer; PassEncoder::threadMain releases it after
+                         * encoder_encode() has consumed the picture */
+                        dest->planes[0] = src->planes[0];
+                        dest->planes[1] = src->planes[1];
+                        dest->planes[2] = src->planes[2];
+                    }
+                    else
+                    {
                     if (!dest->planes[0])
                         dest->planes[0] = X265_MALLOC(char, dest->framesize);
 
@@ -1196,6 +1224,7 @@ ret:
                     int height = (src->height * (src->format == 2 ? 2 : 1));
                     dest->planes[1] = (char*)dest->planes[0] + src->stride[0] * height;
                     dest->planes[2] = (char*)dest->planes[1] + src->stride[1] * (height >> x265_cli_csps[src->colorSpace].height[1]);
+                    }
 #if ENABLE_ALPHA
                     if (m_parentEnc->m_param->numScalableLayers > 1)
                     {

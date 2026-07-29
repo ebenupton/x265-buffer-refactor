@@ -54,6 +54,12 @@ protected:
     ThreadSafeInteger readCount;
 
     ThreadSafeInteger writeCount;
+
+    /* zero-copy mode: readPicture() advances readCursor (consumer thread only)
+     * while readCount becomes the release counter, bumped by releaseFrame() */
+    bool zeroCopy;
+
+    int readCursor;
     char* buf[QUEUE_SIZE];
     FILE *ifs;
     int guessFrameCount();
@@ -72,6 +78,10 @@ public:
     void startReader();
 
     bool readPicture(x265_picture&);
+
+    bool enableZeroCopy()                         { zeroCopy = true; return true; }
+
+    void releaseFrame()                           { readCount.incr(); }
 
     const char *getName() const                   { return "yuv"; }
 
