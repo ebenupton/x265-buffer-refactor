@@ -1023,6 +1023,58 @@ namespace X265_NS {
                 general_log(param, input[view]->getName(), X265_LOG_INFO, "%s\n", buf);
         }
 
+        /* Direct ingest: for a plain single encode (one view/layer, no scaler,
+         * no field split, 8-bit, matching csp, bframes 0, and no feature that
+         * reads a previous frame's fenc pixels — frame-dup, temporal filter,
+         * hist scenecut, weightp) re-lay the input ring in the encoder's fenc
+         * geometry so encoder_encode() can alias the slots (bCopyPicToFrame=0)
+         * instead of copying every frame in copyFromPicture(). Must be decided
+         * before startReader() spins up the file thread. frameNumThreads must
+         * be explicit since the ring depth has to cover frames in flight. */
+        if (!isAbrLadderConfig && !enableScaler && param->numViews == 1 &&
+            !param->format && param->numScalableLayers <= 1 && !param->bField &&
+#if ENABLE_ALPHA
+            !param->bEnableAlpha &&
+#endif
+            param->internalBitDepth == 8 && info[0].depth == 8 &&
+            param->internalCsp == info[0].csp &&
+            !param->bframes && param->frameNumThreads > 0 &&
+            !param->bEnableFrameDuplication && !param->bEnableTemporalFilter &&
+            !param->bHistBasedSceneCut &&
+            !param->bEnableWeightedPred && !param->bEnableWeightedBiPred)
+        {
+            uint32_t maxCU = param->maxCUSize;
+            uint32_t stride = ((param->sourceWidth + maxCU - 1) / maxCU) * maxCU;
+            uint32_t maxHeight = ((param->sourceHeight + maxCU - 1) / maxCU) * maxCU;
+            uint32_t lumaMarginX = maxCU + 32, lumaMarginY = maxCU + 16;
+            int hShift = x265_cli_csps[param->internalCsp].width[1];
+            int vShift = x265_cli_csps[param->internalCsp].height[1];
+            uint32_t strideC = (stride >> hShift) + (lumaMarginX << 1);
+            uint32_t chromaMarginY = lumaMarginY >> vShift;
+            stride += lumaMarginX << 1;
+            uint32_t lumaBytes = stride * (maxHeight + (lumaMarginY << 1));
+            uint32_t chromaBytes = strideC * ((maxHeight >> vShift) + (chromaMarginY << 1));
+
+            FrameBufGeometry& g = directGeo;
+            g.slotBytes = lumaBytes + 2 * chromaBytes;
+            g.planeOffset[0] = lumaMarginY * stride + lumaMarginX;
+            g.planeOffset[1] = lumaBytes + chromaMarginY * strideC + lumaMarginX;
+            g.planeOffset[2] = lumaBytes + chromaBytes + chromaMarginY * strideC + lumaMarginX;
+            g.stride[0] = stride;
+            g.stride[1] = g.stride[2] = strideC;
+            g.rows[0] = param->sourceHeight;
+            g.rows[1] = g.rows[2] = param->sourceHeight >> vShift;
+            g.rowBytes[0] = param->sourceWidth;
+            g.rowBytes[1] = g.rowBytes[2] = param->sourceWidth >> hShift;
+            g.slots = param->frameNumThreads + param->lookaheadDepth + 6;
+
+            if (input[0]->enableDirectIngest(g))
+            {
+                inputDirect = true;
+                param->bCopyPicToFrame = 0;
+            }
+        }
+
         for (int view = 0; view < param->numViews - !!param->format; view++)
             this->input[view]->startReader();
 

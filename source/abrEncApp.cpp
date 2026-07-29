@@ -227,6 +227,7 @@ namespace X265_NS {
         m_param = cliopt.param;
         m_inputOver = false;
         m_inputZeroCopy = false;
+        m_inputDirect = false;
         m_lastIdx = -1;
         m_encoder = NULL;
         m_scaler = NULL;
@@ -251,6 +252,9 @@ namespace X265_NS {
                 !m_param->format && m_param->numScalableLayers <= 1 &&
                 !m_param->bField && !m_cliopt.enableScaler &&
                 m_input[0]->enableZeroCopy();
+            /* direct ingest was decided (and the ring re-laid) during option
+             * parsing; its eligibility is a strict subset of zero-copy's */
+            m_inputDirect = m_cliopt.inputDirect && m_inputZeroCopy;
         }
         else
         {
@@ -296,6 +300,23 @@ namespace X265_NS {
 
         /* get the encoder parameters post-initialization */
         m_cliopt.api->encoder_parameters(m_encoder, m_param);
+
+        if (m_inputDirect)
+        {
+            /* the ring geometry was derived from pre-open params; if the
+             * encoder adjusted anything it depends on, the aliased slots
+             * would no longer match the fenc layout — abort rather than
+             * silently corrupt the encode */
+            uint32_t maxCU = m_param->maxCUSize;
+            uint32_t stride = ((m_param->sourceWidth + maxCU - 1) / maxCU) * maxCU + ((maxCU + 32) << 1);
+            if (stride != m_cliopt.directGeo.stride[0] ||
+                (uint32_t)(m_param->frameNumThreads + m_param->lookaheadDepth + 3) > m_cliopt.directGeo.slots)
+            {
+                x265_log(NULL, X265_LOG_ERROR, "direct-ingest geometry invalidated by encoder_open()\n");
+                m_ret = 2;
+                return -1;
+            }
+        }
 
         return 1;
     }
@@ -822,7 +843,7 @@ ret:
                     int idx = (inFrameCount - 1) % m_parent->m_queueSize;
                     m_parent->m_picIdxReadCnt[m_id][idx].incr();
                     m_parent->m_picReadCnt[m_id].incr();
-                    if (m_inputZeroCopy && picInput)
+                    if (!m_inputDirect && m_inputZeroCopy && picInput)
                         m_input[0]->releaseFrame();
                     if (m_cliopt.loadLevel && picInput)
                     {
@@ -836,6 +857,14 @@ ret:
                         m_ret = 4;
                         break;
                     }
+
+                    /* in direct-ingest mode the encoder aliases the ring slot as
+                     * the frame's fenc pic, so it stays pinned until the frame
+                     * is fully encoded: release one slot per output (in-order,
+                     * valid because bframes=0 keeps encode order == input order) */
+                    if (m_inputDirect)
+                        for (int enc = 0; enc < numEncoded; enc++)
+                            m_input[0]->releaseFrame();
 
                     if (reconPlay && numEncoded)
                         reconPlay->writePicture(*pic_recon);
@@ -875,6 +904,10 @@ ret:
                     m_ret = 4;
                     break;
                 }
+
+                if (m_inputDirect)
+                    for (int enc = 0; enc < numEncoded; enc++)
+                        m_input[0]->releaseFrame();
 
                 if (reconPlay && numEncoded)
                     reconPlay->writePicture(*pic_recon);

@@ -59,13 +59,22 @@ protected:
      * while readCount becomes the release counter, bumped by releaseFrame() */
     bool zeroCopy;
 
+    /* direct-ingest mode: ring slots are laid out in the encoder's fenc
+     * geometry and file rows are scattered into place with readv() */
+    bool directIngest;
+    bool sawEof;
+    FrameBufGeometry geo;
+
     int readCursor;
-    char* buf[QUEUE_SIZE];
+    int ringSlots;
+    char** buf;
     FILE *ifs;
     int guessFrameCount();
     void threadMain();
 
     bool populateFrameQueue();
+
+    bool readFrameDirect(char* slot);
 
 public:
 
@@ -73,13 +82,15 @@ public:
 
     virtual ~YUVInput();
     void release();
-    bool isEof() const                            { return ifs && feof(ifs); }
+    bool isEof() const                            { return sawEof || (ifs && feof(ifs)); }
     bool isFail()                                 { return !(ifs && !ferror(ifs) && threadActive); }
     void startReader();
 
     bool readPicture(x265_picture&);
 
     bool enableZeroCopy()                         { zeroCopy = true; return true; }
+
+    bool enableDirectIngest(const FrameBufGeometry& g);
 
     void releaseFrame()                           { readCount.incr(); }
 
