@@ -326,6 +326,19 @@ void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t first
     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 }
 
+/* The per-part init block (m_qp .. m_chromaIntraDir) is one contiguous charBuf
+ * region whose contents depend only on (depth, qp) for a given encode; capture
+ * it once per (depth, qp) and replay with a single memcpy instead of eight
+ * indirect broadcast calls plus a memset per initSubCU. */
+struct SubCUInitTemplate
+{
+    int      qp;
+    uint32_t bytes;  // 0 = invalid
+    uint8_t  lossless;
+    uint8_t  buf[CUData::BytesPerPartition * MAX_NUM_PARTITIONS];
+};
+static __thread SubCUInitTemplate s_subCUTpl[NUM_FULL_DEPTH];
+
 // initialize Sub partition
 #if ENABLE_SCC_EXT
 void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp, MV lastIntraBCMv[2])
@@ -354,19 +367,31 @@ void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp)
 
     X265_CHECK(m_numPartitions == cuGeom.numPartitions, "initSubCU() size mismatch\n");
 
-    m_partSet((uint8_t*)m_qp, (uint8_t)qp);
-    m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
+    uint32_t initBytes = (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 4 : BytesPerPartition) * m_numPartitions;
+    SubCUInitTemplate& tpl = s_subCUTpl[cuGeom.depth];
+    if (tpl.bytes == initBytes && tpl.qp == qp && tpl.lossless == (uint8_t)m_encData->m_param->bLossless)
+        memcpy(m_qp, tpl.buf, initBytes);
+    else
+    {
+        m_partSet((uint8_t*)m_qp, (uint8_t)qp);
+        m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
 
-    m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
-    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
-    m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
-    m_partSet(m_tqBypass,     (uint8_t)m_encData->m_param->bLossless);
-    m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
-    m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
-    m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
+        m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
+        m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
+        m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
+        m_partSet(m_tqBypass,     (uint8_t)m_encData->m_param->bLossless);
+        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
+        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
+        m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
 
-    /* initialize the remaining CU data in one memset */
-    memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
+        /* initialize the remaining CU data in one memset */
+        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
+
+        memcpy(tpl.buf, m_qp, initBytes);
+        tpl.qp = qp;
+        tpl.bytes = initBytes;
+        tpl.lossless = (uint8_t)m_encData->m_param->bLossless;
+    }
     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 
 #if ENABLE_SCC_EXT
