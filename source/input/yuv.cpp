@@ -53,6 +53,8 @@ YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
     alphaAvailable = alpha;
     threadActive = false;
     ifs = NULL;
+    zeroCopy = false;
+    readCursor = 0;
 
     if (colorSpace < 0 || colorSpace >= X265_CSP_MAX)
     {
@@ -197,7 +199,7 @@ bool YUVInput::populateFrameQueue()
 
 bool YUVInput::readPicture(x265_picture& pic)
 {
-    int read = readCount.get();
+    int read = zeroCopy ? readCursor : readCount.get();
     int written = writeCount.get();
 
 #if ENABLE_THREADING
@@ -233,7 +235,10 @@ bool YUVInput::readPicture(x265_picture& pic)
             pic.planes[3] = (char*)pic.planes[2] + pic.stride[2] * (height >> x265_cli_csps[colorSpace].height[2]);
         }
 #endif
-        readCount.incr();
+        if (zeroCopy)
+            readCursor++;
+        else
+            readCount.incr();
         return true;
     }
     else

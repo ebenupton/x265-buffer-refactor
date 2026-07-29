@@ -74,6 +74,14 @@ public:
 
     virtual bool readPicture(x265_picture& pic) = 0;
 
+    /* Opt in to zero-copy frame handoff: readPicture() hands out pointers into
+     * the reader's internal ring and the slot stays valid until the consumer
+     * calls releaseFrame() (in read order, one call per successful read).
+     * Returns false if the reader does not support this mode. */
+    virtual bool enableZeroCopy() { return false; }
+
+    virtual void releaseFrame() {}
+
     virtual bool isEof() const = 0;
 
     virtual bool isFail() = 0;
