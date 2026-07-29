@@ -2,16 +2,37 @@
 
 Buffer-flow refactor of the [x265](https://bitbucket.org/multicoreware/x265_git) 4.1 HEVC encoder that eliminates the per-`Mode` scratch-to-picture copies (the "flab" x265 introduced by not using x264's pointer-alias model). Targeted at Cortex-A76 (Raspberry Pi 5) but the changes are portable.
 
-**Bit-exact against upstream 4.1** at three test configs (1-thread 5 Mbps low-latency, 1-thread 2 Mbps LL, 4-thread 5 Mbps real-time on `bbb_30s_1080p30`). Every commit passes the MD5 gate.
+**Bit-exact against upstream 4.1** at three test configs (1-thread 5 Mbps low-latency, 1-thread 2 Mbps LL, 4-thread 5 Mbps real-time on `bbb_30s_1080p30`). Every commit passes the MD5 gate. One caveat from Phase 10 onward: the informational SEI embeds x265's param string, which includes `copy-pic=%d`, so bitstreams are compared with `--no-info`; the *pixel-affecting* payload is byte-identical.
 
 ## Headline numbers (bbb_30s_1080p30, Pi 5 @ 2.4 GHz)
 
 | workload | vs upstream 4.1 |
 |---|---|
-| 1t 5 Mbps LL (mean of 4 pairs) | **−2.7 %** |
-| 4t 5 Mbps realtime (mean of 4 pairs) | **−4.3 %** |
+| 1t 5 Mbps LL (mean of 4 pairs, Phases 1–6b) | **−2.7 %** |
+| 4t 5 Mbps realtime (mean of 4 pairs, Phases 1–6b) | **−4.3 %** |
 | top-func plumbing time (`memcpy` + `blockcopy_pp_*` + `memset`) | **−2.9 pp** self-time |
+| + Phases 8–10 (ingest rework), 1t 5 Mbps LL | additional **−4.6 %** cycles |
+| + Phases 8–10, 4t 5 Mbps realtime | additional **−5.8 %** cycles, 29.3 → **31.4 fps** |
 | + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 % / −2.1 %** cycles |
+
+### Data-movement parity with x264
+
+The end goal of the later phases: every cycle x265 spends over x264 should be
+attributable to *search work* (more intra modes, deeper partition tree, more
+merge candidates), not *structural flab* (copy/zero plumbing). Measured on the
+same clip and settings-equivalent configs (flat perf profile, pure copy/zero
+primitives only):
+
+| | data-movement cycles |
+|---|---|
+| x264 (reference) | 8.5 G |
+| x265, before Phase 8 | 19.2 G |
+| x265, after Phase 10 | **9.1 G** |
+
+The remaining ~0.6 G gap is dominated by CTU-commit copies that x264 pays in
+equivalent form. Frame ingest is now *cheaper* than x264's: zero user-space
+copies from disk to encode (x264 spends ~2.9 G in `plane_copy`), because
+`readv()` scatters file rows directly into encoder-geometry buffers (Phase 10).
 
 The refactor also uncovered and fixed three upstream stride bugs in
 `getBestIntraModeChroma`, `checkIntraInInter` and `cbf0Dist` chroma paths.
@@ -31,6 +52,10 @@ The refactor also uncovered and fixed three upstream stride bugs in
 | `ad3c69f` | Phase 5 slice — skip scratch Yuv allocation for gated-off `Mode` slots |
 | `b4224b4` | Phase 6 — bulk `memcpy` for `CUData::copyToPic` at full-CTU commit |
 | `4289aab` | Phase 6b — consolidate the MV + coeff `memcpy`s |
+| `3a97004` | Phase 7 — replay `initSubCU` per-part init from a (depth,qp) template |
+| `01009e5` | Phase 8 — skip pic-CTU per-part init in plain encodes |
+| `77d15cc` | Phase 9 — zero-copy CLI frame ingest (encoder reads the file thread's ring buffer in place) |
+| `aeb83c3` | Phase 10 — direct ingest: the CLI lays its ring slots out in fenc geometry and `readv()` scatters packed file rows straight into strided position; the encoder aliases the slots via x265's dormant `bCopyPicToFrame=0` path, eliminating `copyFromPicture` entirely |
 
 See `docs/refactor/MEMORY-REFACTOR-PLAN.md` for the plan-of-record; individual investigation memos capture the reasoning at each fork.
 
