@@ -435,6 +435,11 @@ static const struct option long_options[] =
         char** argString;
         char *stringPool;
 
+        /* direct ingest: input reader ring re-laid-out in fenc geometry so the
+         * encoder aliases the slots via bCopyPicToFrame=0 (see PassEncoder) */
+        bool inputDirect;
+        FrameBufGeometry directGeo;
+
         /* ABR ladder settings */
         bool isAbrLadderConfig;
         bool enableScaler;
@@ -473,6 +478,8 @@ static const struct option long_options[] =
             startTime = x265_mdate();
             prevUpdateTime = 0;
             bDither = false;
+            inputDirect = false;
+            memset(&directGeo, 0, sizeof(directGeo));
             isAbrLadderConfig = false;
             enableScaler = false;
             encName[0] = 0;

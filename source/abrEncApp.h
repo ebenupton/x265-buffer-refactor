@@ -79,6 +79,9 @@ namespace X265_NS {
         Scaler *m_scaler;
         bool m_inputOver;
         bool m_inputZeroCopy;
+        /* direct ingest: input ring slots are in fenc geometry and aliased by
+         * the encoder (bCopyPicToFrame=0); release one slot per encoded output */
+        bool m_inputDirect;
 
         int m_threadActive;
         int m_lastIdx;

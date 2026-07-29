@@ -35,6 +35,14 @@
 #if defined(_MSC_VER)
 #pragma warning(disable: 4996) // POSIX setmode and fileno deprecated
 #endif
+#else
+#include <sys/uio.h>
+#include <unistd.h>
+#include <limits.h>
+#include <errno.h>
+#ifndef IOV_MAX
+#define IOV_MAX 1024
+#endif
 #endif
 
 using namespace X265_NS;
@@ -42,7 +50,9 @@ using namespace std;
 
 YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
 {
-    for (int i = 0; i < QUEUE_SIZE; i++)
+    ringSlots = QUEUE_SIZE;
+    buf = X265_MALLOC(char*, ringSlots);
+    for (int i = 0; i < ringSlots; i++)
         buf[i] = NULL;
 
     depth = info.depth;
@@ -53,6 +63,8 @@ YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
     threadActive = false;
     ifs = NULL;
     zeroCopy = false;
+    directIngest = false;
+    sawEof = false;
     readCursor = 0;
 
     uint32_t pixelbytes = depth > 8 ? 2 : 1;
@@ -78,6 +90,11 @@ YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
     }
     else
         ifs = x265_fopen(info.filename, "rb");
+    if (ifs)
+        /* all reads are >= one frame, so stdio buffering only adds a copy;
+         * unbuffered also keeps the fd position coherent with the readv()
+         * path used by direct ingest */
+        setvbuf(ifs, NULL, _IONBF, 0);
     if (ifs && !ferror(ifs))
         threadActive = true;
     else
@@ -88,7 +105,7 @@ YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
         return;
     }
 
-    for (uint32_t i = 0; i < QUEUE_SIZE; i++)
+    for (int i = 0; i < ringSlots; i++)
     {
         buf[i] = X265_MALLOC(char, framesize);
         if (buf[i] == NULL)
@@ -127,9 +144,111 @@ YUVInput::~YUVInput()
 {
     if (ifs && ifs != stdin)
         fclose(ifs);
-    for (int i = 0; i < QUEUE_SIZE; i++)
-        X265_FREE(buf[i]);
+    if (buf)
+        for (int i = 0; i < ringSlots; i++)
+            X265_FREE(buf[i]);
+    X265_FREE(buf);
 }
+
+bool YUVInput::enableDirectIngest(const FrameBufGeometry& g)
+{
+#if _WIN32
+    (void)g;
+    return false;
+#else
+    if (!threadActive || depth > 8 || x265_cli_csps[colorSpace].planes != 3 || alphaAvailable)
+        return false;
+
+    /* the source geometry must account for every byte of the packed frame,
+     * or the readv() scatter would fall out of sync with the stream */
+    uint64_t total = 0;
+    for (int p = 0; p < 3; p++)
+    {
+        total += (uint64_t)g.rows[p] * g.rowBytes[p];
+        if (g.planeOffset[p] + (uint64_t)(g.rows[p] ? g.rows[p] - 1 : 0) * g.stride[p] + g.rowBytes[p] > g.slotBytes)
+            return false;
+    }
+    if (total != framesize || g.slots < QUEUE_SIZE)
+        return false;
+
+    char** newBuf = X265_MALLOC(char*, g.slots);
+    if (!newBuf)
+        return false;
+    for (uint32_t i = 0; i < g.slots; i++)
+    {
+        newBuf[i] = X265_MALLOC(char, g.slotBytes);
+        if (!newBuf[i])
+        {
+            for (uint32_t j = 0; j < i; j++)
+                X265_FREE(newBuf[j]);
+            X265_FREE(newBuf);
+            return false;
+        }
+    }
+
+    for (int i = 0; i < ringSlots; i++)
+        X265_FREE(buf[i]);
+    X265_FREE(buf);
+
+    buf = newBuf;
+    ringSlots = (int)g.slots;
+    geo = g;
+    directIngest = true;
+    zeroCopy = true;
+    return true;
+#endif
+}
+
+#if !_WIN32
+bool YUVInput::readFrameDirect(char* slot)
+{
+    /* scatter each packed source row into its strided destination */
+    struct iovec iov[IOV_MAX];
+    int fd = fileno(ifs);
+    int n = 0;
+
+    for (int p = 0; p < 3; p++)
+    {
+        char* dst = slot + geo.planeOffset[p];
+        for (uint32_t r = 0; r < geo.rows[p]; r++, dst += geo.stride[p])
+        {
+            iov[n].iov_base = dst;
+            iov[n].iov_len = geo.rowBytes[p];
+            if (++n == IOV_MAX || (p == 2 && r == geo.rows[p] - 1))
+            {
+                int i = 0;
+                while (i < n)
+                {
+                    ssize_t got = readv(fd, iov + i, n - i);
+                    if (got < 0)
+                    {
+                        if (errno == EINTR)
+                            continue;
+                        return false;
+                    }
+                    if (got == 0)
+                    {
+                        sawEof = true;
+                        return false;
+                    }
+                    while (i < n && (size_t)got >= iov[i].iov_len)
+                    {
+                        got -= iov[i].iov_len;
+                        i++;
+                    }
+                    if (i < n && got)
+                    {
+                        iov[i].iov_base = (char*)iov[i].iov_base + got;
+                        iov[i].iov_len -= got;
+                    }
+                }
+                n = 0;
+            }
+        }
+    }
+    return true;
+}
+#endif
 
 void YUVInput::release()
 {
@@ -166,7 +285,7 @@ bool YUVInput::populateFrameQueue()
     /* wait for room in the ring buffer */
     int written = writeCount.get();
     int read = readCount.get();
-    while (written - read > QUEUE_SIZE - 2)
+    while (written - read > ringSlots - 2)
     {
         read = readCount.waitForChange(read);
         if (!threadActive)
@@ -174,7 +293,18 @@ bool YUVInput::populateFrameQueue()
             return false;
     }
     ProfileScopeEvent(frameRead);
-    if (fread(buf[written % QUEUE_SIZE], framesize, 1, ifs) == 1)
+#if !_WIN32
+    if (directIngest)
+    {
+        if (readFrameDirect(buf[written % ringSlots]))
+        {
+            writeCount.incr();
+            return true;
+        }
+        return false;
+    }
+#endif
+    if (fread(buf[written % ringSlots], framesize, 1, ifs) == 1)
     {
         writeCount.incr();
         return true;
@@ -208,12 +338,24 @@ bool YUVInput::readPicture(x265_picture& pic)
         pic.framesize = framesize;
         pic.height = height;
         pic.width = width;
+        if (directIngest)
+        {
+            char* slot = buf[read % ringSlots];
+            for (int p = 0; p < 3; p++)
+            {
+                pic.stride[p] = geo.stride[p];
+                pic.planes[p] = slot + geo.planeOffset[p];
+            }
+        }
+        else
+        {
         pic.stride[0] = width * pixelbytes * (pic.format == 1 ? 2 : 1);
         pic.stride[1] = pic.stride[0] >> x265_cli_csps[colorSpace].width[1];
         pic.stride[2] = pic.stride[0] >> x265_cli_csps[colorSpace].width[2];
         pic.planes[0] = buf[read % QUEUE_SIZE];
         pic.planes[1] = (char*)pic.planes[0] + pic.stride[0] * (height * (pic.format == 2 ? 2 : 1));
         pic.planes[2] = (char*)pic.planes[1] + pic.stride[1] * ((height * (pic.format == 2 ? 2 : 1)) >> x265_cli_csps[colorSpace].height[1]);
+        }
 #if ENABLE_ALPHA
         if (alphaAvailable)
         {

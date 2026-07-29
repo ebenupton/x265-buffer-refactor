@@ -56,6 +56,19 @@ struct InputFileInfo
     const char *filename;
 };
 
+/* Destination geometry for direct ingest: each ring slot is laid out exactly
+ * like the encoder's internal fenc PicYuv (margins and strides included) so
+ * the encoder can alias the slot with no intermediate copy (--no-copy-pic) */
+struct FrameBufGeometry
+{
+    uint32_t slotBytes;      /* total allocation per ring slot */
+    uint32_t planeOffset[3]; /* byte offset of each plane origin within the slot */
+    uint32_t stride[3];      /* destination stride of each plane, in bytes */
+    uint32_t rows[3];        /* source rows per plane */
+    uint32_t rowBytes[3];    /* source row length per plane, in bytes */
+    uint32_t slots;          /* required ring depth (frames pinned in-flight + prefetch) */
+};
+
 class InputFile
 {
 protected:
@@ -79,6 +92,14 @@ public:
      * calls releaseFrame() (in read order, one call per successful read).
      * Returns false if the reader does not support this mode. */
     virtual bool enableZeroCopy() { return false; }
+
+    /* Stronger form of zero-copy: the reader re-allocates its ring in the
+     * encoder's fenc geometry and scatters file rows directly into place, so
+     * the slot can be aliased as the frame's PicYuv (bCopyPicToFrame=0).
+     * Slots stay pinned until releaseFrame(), one call per *encoded output*.
+     * Must be called before startReader(). Returns false if unsupported or if
+     * the geometry does not match the stream. Implies zero-copy handoff. */
+    virtual bool enableDirectIngest(const FrameBufGeometry&) { return false; }
 
     virtual void releaseFrame() {}
 
