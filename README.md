@@ -14,6 +14,7 @@ Buffer-flow refactor of the [x265](https://bitbucket.org/multicoreware/x265_git)
 | + Phases 8–10 (ingest rework), 1t 5 Mbps LL | additional **−4.6 %** cycles |
 | + Phases 8–10, 4t 5 Mbps realtime | additional **−5.8 %** cycles, 29.3 → **31.4 fps** |
 | + Phase 11 (cbf-gated coeff commit), 1t 5 Mbps LL | additional **−1.4 %** cycles |
+| + Phase 11, 4t 5 Mbps realtime | additional **−4.9 %** cycles, 31.6 → **33.2 fps** |
 | + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 % / −2.1 %** cycles |
 
 ### Data-movement parity with x264
