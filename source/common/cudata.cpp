@@ -685,6 +685,67 @@ void CUData::copyToPic(uint32_t depth) const
             memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
         }
     }
+
+    fillTMVPRecords();  /* DM Phase 16 */
+}
+
+/* DM Phase 16 (2026-07-31): refresh the TMVP sidecar for this commit region
+ * while the source arrays are hot.  getCollocatedMV() reads the collocated
+ * frame at 16x16 (TMVP_UNIT_MASK) granularity: unit-base mv/refIdx/intra
+ * plus a per-part MODE_NONE test at the unmasked index — captured here as a
+ * bitmask.  Every part of every CTU flows through a commit (present parts
+ * directly, absent parts inside their split region), so all fields are
+ * rewritten each frame even on recycled FrameData. */
+void CUData::fillTMVPRecords() const
+{
+    TMVPRecord* recs = m_encData->m_tmvpRecords;
+    if (!recs)
+        return;
+
+    const uint32_t unitsPerCTU = m_encData->m_param->num4x4Partitions >> 4;
+    recs += m_cuAddr * unitsPerCTU;
+    uint32_t uFirst = m_absIdxInCTU >> 4;
+    uint32_t uLast = (m_absIdxInCTU + m_numPartitions - 1) >> 4;
+
+    /* MODE_NONE parts exist only in picture-boundary CTUs (~2 % of CTUs at
+     * 1080p); interior commits can store a zero mask without the bit loop. */
+    const SPS* sps = m_slice->m_sps;
+    uint32_t ctuSize = 1 << m_slice->m_param->maxLog2CUSize;
+    bool boundary = m_cuPelX + ctuSize > sps->picWidthInLumaSamples ||
+                    m_cuPelY + ctuSize > sps->picHeightInLumaSamples;
+
+    for (uint32_t u = uFirst; u <= uLast; u++)
+    {
+        TMVPRecord& r = recs[u];
+        int base = (int)(u << 4) - (int)m_absIdxInCTU; /* local index of the unit base */
+        if (base >= 0 && base < (int)m_numPartitions)
+        {
+            r.intra = (uint8_t)isIntra(base);
+            r.refIdx[0] = m_refIdx[0][base];
+            r.refIdx[1] = m_refIdx[1][base];
+            r.mv[0] = m_mv[0][base];
+            r.mv[1] = m_mv[1][base];
+        }
+
+        if (!boundary)
+        {
+            r.noneMask = 0;
+            continue;
+        }
+
+        uint32_t lo = X265_MAX(u << 4, m_absIdxInCTU);
+        uint32_t hi = X265_MIN((u << 4) + 16, m_absIdxInCTU + m_numPartitions);
+        uint16_t mask = r.noneMask;
+        for (uint32_t p = lo; p < hi; p++)
+        {
+            uint16_t bit = (uint16_t)(1 << (p & 15));
+            if (m_predMode[p - m_absIdxInCTU] == MODE_NONE)
+                mask |= bit;
+            else
+                mask &= (uint16_t)~bit;
+        }
+        r.noneMask = mask;
+    }
 }
 
 /* The reverse of copyToPic, called only by encodeResidue */
@@ -770,6 +831,10 @@ void CUData::updatePic(uint32_t depth, int picCsp) const
         memcpy(ctu.m_trCoeff[1] + tmpY2, m_trCoeff[1], sizeof(coeff_t) * tmpY);
         memcpy(ctu.m_trCoeff[2] + tmpY2, m_trCoeff[2], sizeof(coeff_t) * tmpY);
     }
+
+    /* DM Phase 16: no sidecar refill needed here — encodeResidue only clears
+     * the skip bit in predMode (neither isIntra nor MODE_NONE changes) and
+     * never touches mv/refIdx, so the copyToPic-time records stay valid. */
 }
 
 const CUData* CUData::getPULeft(uint32_t& lPartUnitIdx, uint32_t curPartUnitIdx) const
@@ -2293,6 +2358,36 @@ bool CUData::getColMVP(MV& outMV, int& outRefIdx, int picList, int cuAddr, int p
 bool CUData::getCollocatedMV(int cuAddr, int partUnitIdx, InterNeighbourMV *neighbour) const
 {
     const Frame* colPic = m_slice->m_refFrameList[m_slice->isInterB() && !m_slice->m_colFromL0Flag][m_slice->m_colRefIdx];
+
+    /* DM Phase 16: read the compact per-unit sidecar the collocated frame's
+     * commits filled (see fillTMVPRecords) instead of three scattered
+     * DRAM-cold lines of its per-part arrays.  Field-for-field identical to
+     * the generic path below. */
+    const TMVPRecord* recs = colPic->m_encData->m_tmvpRecords;
+    if (recs)
+    {
+        const TMVPRecord& r = recs[cuAddr * (int)(m_encData->m_param->num4x4Partitions >> 4) + (partUnitIdx >> 4)];
+        if (((r.noneMask >> (partUnitIdx & 15)) & 1) || r.intra)
+            return false;
+
+        for (int list = 0; list < 2; list++)
+        {
+            neighbour->cuAddr[list] = cuAddr;
+            int colRefPicList = m_slice->m_bCheckLDC ? list : m_slice->m_colFromL0Flag;
+            int colRefIdx = r.refIdx[colRefPicList];
+
+            if (colRefIdx < 0)
+                colRefPicList = !colRefPicList;
+
+            neighbour->refIdx[list] = r.refIdx[colRefPicList];
+            neighbour->refIdx[list] |= colRefPicList << 4;
+
+            neighbour->mv[list] = r.mv[colRefPicList];
+        }
+
+        return neighbour->unifiedRef != -1;
+    }
+
     const CUData* colCU = colPic->m_encData->getPicCTU(cuAddr);
 
     uint32_t absPartAddr = partUnitIdx & TMVP_UNIT_MASK;
