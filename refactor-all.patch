@@ -1,3 +1,4 @@
+diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.cpp b/source/abrEncApp.cpp
 --- a/source/abrEncApp.cpp	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/abrEncApp.cpp	2026-07-29 16:32:49.820150021 +0100
 @@ -177,7 +177,10 @@
@@ -128,6 +129,7 @@
  #if ENABLE_ALPHA
                      if (m_parentEnc->m_param->numScalableLayers > 1)
                      {
+diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.h b/source/abrEncApp.h
 --- a/source/abrEncApp.h	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/abrEncApp.h	2026-07-29 16:32:49.820150021 +0100
 @@ -78,6 +78,10 @@
@@ -141,6 +143,7 @@
  
          int m_threadActive;
          int m_lastIdx;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/asm-primitives.cpp b/source/common/aarch64/asm-primitives.cpp
 --- a/source/common/aarch64/asm-primitives.cpp	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/common/aarch64/asm-primitives.cpp	2026-07-01 13:58:44.061715257 +0100
 @@ -582,7 +582,8 @@
@@ -170,6 +173,7 @@
          setupIntraPrimitives_neon(p);
          setupSaoPrimitives_neon(p);
      }
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/deblock-prim.cpp b/source/common/aarch64/deblock-prim.cpp
 --- a/source/common/aarch64/deblock-prim.cpp	1970-01-01 01:00:00.000000000 +0100
 +++ b/source/common/aarch64/deblock-prim.cpp	2026-06-30 12:47:59.825468245 +0100
 @@ -0,0 +1,456 @@
@@ -629,6 +633,7 @@
 +} /* namespace X265_NS */
 +
 +#endif
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/fun-decls.h b/source/common/aarch64/fun-decls.h
 --- a/source/common/aarch64/fun-decls.h	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/fun-decls.h	2026-07-01 13:59:51.849915787 +0100
 @@ -169,10 +169,10 @@
@@ -657,6 +662,7 @@
  
  void PFX(scale1D_128to64_sve2(pixel *dst, const pixel *src));
  void PFX(scale2D_64to32_sve2(pixel* dst, const pixel* src, intptr_t stride));
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/loopfilter-prim.h b/source/common/aarch64/loopfilter-prim.h
 --- a/source/common/aarch64/loopfilter-prim.h	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/loopfilter-prim.h	2026-06-30 12:47:59.813468214 +0100
 @@ -9,6 +9,7 @@
@@ -667,6 +673,7 @@
  
  };
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-prim.cpp b/source/common/aarch64/pixel-prim.cpp
 --- a/source/common/aarch64/pixel-prim.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-prim.cpp	2026-07-31 12:05:04.117490945 +0100
 @@ -1482,7 +1482,8 @@
@@ -752,6 +759,7 @@
  
  }
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util.S b/source/common/aarch64/pixel-util.S
 --- a/source/common/aarch64/pixel-util.S	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-util.S	2026-07-01 13:57:31.637500652 +0100
 @@ -97,64 +97,66 @@
@@ -851,6 +859,7 @@
  .endr
      cbnz            w12, .Loop_residual_32
      ret
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util-sve2.S b/source/common/aarch64/pixel-util-sve2.S
 --- a/source/common/aarch64/pixel-util-sve2.S	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-util-sve2.S	2026-07-01 13:58:13.533624846 +0100
 @@ -230,22 +230,25 @@
@@ -954,6 +963,7 @@
  .endr
      ret
  endfunc
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/CMakeLists.txt b/source/common/CMakeLists.txt
 --- a/source/common/CMakeLists.txt	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/common/CMakeLists.txt	2026-06-30 12:47:59.893468425 +0100
 @@ -104,7 +104,7 @@
@@ -965,9 +975,30 @@
      set(C_SRCS_NEON_DOTPROD filter-neon-dotprod.cpp)
      set(C_SRCS_NEON_I8MM filter-neon-i8mm.cpp)
      set(C_SRCS_SVE sao-prim-sve.cpp dct-prim-sve.cpp)
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/common/cudata.cpp
 --- a/source/common/cudata.cpp	2026-06-26 15:31:47.452698281 +0100
-+++ b/source/common/cudata.cpp	2026-07-29 16:32:53.176160587 +0100
-@@ -295,24 +295,46 @@
++++ b/source/common/cudata.cpp	2026-07-31 14:47:20.338263837 +0100
+@@ -278,6 +278,19 @@
+     }
+ }
+ 
++/* DM Phase 13 (2026-07-31): the only reader of committed per-part distortion
++ * is Encoder::copyDistortionData (analysis-save / multi-pass / CTU-distortion-
++ * refine paths).  In a plain encode the pic-CTU m_distortion block is written
++ * (initCTU memset + copyToPic memcpy, both cold cache lines) and never read.
++ * Gate the zero-init and the commit on the features that consume it. */
++static inline bool needDistortionData(const x265_param* p)
++{
++    return p->analysisSave[0] || p->analysisLoad[0] ||
++           p->analysisMultiPassRefine || p->analysisMultiPassDistortion ||
++           p->ctuDistortionRefine || p->bDynamicRefine ||
++           p->rc.bStatWrite || p->rc.bStatRead;
++}
++
+ void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t firstRowInSlice, uint32_t lastRowInSlice, uint32_t lastCuInSlice)
+ {
+     m_encData       = frame.m_encData;
+@@ -295,24 +308,46 @@
      m_lastIntraBCMv[1].set(0, 0);
  #endif
  
@@ -1026,8 +1057,13 @@
      for (int8_t i = 0; i < NUM_TU_DEPTH; i++)
          m_refTuDepth[i] = -1;
  
-@@ -326,6 +348,19 @@
-     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
+@@ -323,9 +358,23 @@
+     m_cuAbove = (m_cuAddr >= widthInCU) && !m_bFirstRowInSlice ? m_encData->getPicCTU(m_cuAddr - widthInCU) : NULL;
+     m_cuAboveLeft = (m_cuLeft && m_cuAbove) ? m_encData->getPicCTU(m_cuAddr - widthInCU - 1) : NULL;
+     m_cuAboveRight = (m_cuAbove && ((m_cuAddr % widthInCU) < (widthInCU - 1))) ? m_encData->getPicCTU(m_cuAddr - widthInCU + 1) : NULL;
+-    memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
++    if (needDistortionData(iparam))
++        memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
  }
  
 +/* The per-part init block (m_qp .. m_chromaIntraDir) is one contiguous charBuf
@@ -1046,7 +1082,7 @@
  // initialize Sub partition
  #if ENABLE_SCC_EXT
  void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp, MV lastIntraBCMv[2])
-@@ -354,19 +389,31 @@
+@@ -354,20 +403,36 @@
  
      X265_CHECK(m_numPartitions == cuGeom.numPartitions, "initSubCU() size mismatch\n");
  
@@ -1068,6 +1104,9 @@
 +        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
 +        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
 +        m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
++
++        /* initialize the remaining CU data in one memset */
++        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
  
 -    m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
 -    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
@@ -1076,20 +1115,24 @@
 -    m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
 -    m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
 -    m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
-+        /* initialize the remaining CU data in one memset */
-+        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
- 
+-
 -    /* initialize the remaining CU data in one memset */
 -    memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
+-    memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 +        memcpy(tpl.buf, m_qp, initBytes);
 +        tpl.qp = qp;
 +        tpl.bytes = initBytes;
 +        tpl.lossless = (uint8_t)m_encData->m_param->bLossless;
 +    }
-     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
++    /* DM Phase 13: search writes m_distortion[0] on every candidate; entries
++     * 1..np-1 only matter to the gated distortion consumers (copyPartFrom
++     * aggregation feeding copyToPic, both gated). */
++    if (needDistortionData(m_encData->m_param))
++        memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
  
  #if ENABLE_SCC_EXT
-@@ -493,47 +540,131 @@
+     if (lastIntraBCMv)
+@@ -493,47 +558,132 @@
  {
      CUData& ctu = *m_encData->getPicCTU(m_cuAddr);
  
@@ -1199,7 +1242,9 @@
 +        memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
 +    }
  
-     memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
+-    memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
++    if (needDistortionData(m_slice->m_param))
++        memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
  
      uint32_t tmpY = 1 << ((m_slice->m_param->maxLog2CUSize - depth) * 2);
      uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);
@@ -1253,6 +1298,7 @@
      }
  }
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/common/deblock.cpp
 --- a/source/common/deblock.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/deblock.cpp	2026-06-30 12:47:59.893468425 +0100
 @@ -409,7 +409,7 @@
@@ -1264,6 +1310,53 @@
          }
      }
  }
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/ipfilter.cpp b/source/common/ipfilter.cpp
+--- a/source/common/ipfilter.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/ipfilter.cpp	2026-07-31 14:47:20.338263837 +0100
+@@ -28,6 +28,10 @@
+ #include "primitives.h"
+ #include "x265.h"
+ 
++#if defined(__aarch64__) && !HIGH_BIT_DEPTH
++#include <arm_neon.h>
++#endif
++
+ using namespace X265_NS;
+ 
+ #if _MSC_VER
+@@ -67,6 +71,31 @@
+             txt[width + x] = txt[width - 1];
+         }
+ 
++#elif defined(__aarch64__)
++        /* DM Phase 13 (2026-07-31): the margins here are small (48-128
++         * bytes), so the two per-row libc memset calls were dominated by
++         * call/dispatch overhead — at 1080p this function burned ~1.5 G
++         * cycles per 30 s clip between the lowres hpel planes and the recon
++         * border.  Splat the edge pixels with NEON stores instead; margins
++         * are always multiples of 8 (g_maxCUSize + 32 and its chroma/lowres
++         * halvings).  Same bytes written, no calls. */
++        {
++            uint8x16_t l = vdupq_n_u8(txt[0]);
++            uint8x16_t r = vdupq_n_u8(txt[width - 1]);
++            pixel* pl = txt - marginX;
++            pixel* pr = txt + width;
++            int x = 0;
++            for (; x + 16 <= marginX; x += 16)
++            {
++                vst1q_u8(pl + x, l);
++                vst1q_u8(pr + x, r);
++            }
++            if (x < marginX)
++            {
++                vst1_u8(pl + x, vget_low_u8(l));
++                vst1_u8(pr + x, vget_low_u8(r));
++            }
++        }
+ #else
+         memset(txt - marginX, txt[0], marginX);
+         memset(txt + width, txt[width - 1], marginX);
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/loopfilter.cpp b/source/common/loopfilter.cpp
 --- a/source/common/loopfilter.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/loopfilter.cpp	2026-06-30 12:47:59.837468277 +0100
 @@ -172,6 +172,47 @@
@@ -1322,6 +1415,7 @@
 +    p.pelFilterLumaWeak[1]   = pelFilterLumaWeak_c;
  }
  }
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/pixel.cpp b/source/common/pixel.cpp
 --- a/source/common/pixel.cpp	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/pixel.cpp	2026-07-02 10:05:24.029263413 +0100
 @@ -368,6 +368,7 @@
@@ -1354,6 +1448,7 @@
      }
  }
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/primitives.h b/source/common/primitives.h
 --- a/source/common/primitives.h	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/primitives.h	2026-07-02 10:05:40.029305573 +0100
 @@ -154,7 +154,13 @@
@@ -1390,6 +1485,7 @@
  
      integralv_t            integral_initv[NUM_INTEGRAL_SIZE];
      integralh_t            integral_inith[NUM_INTEGRAL_SIZE];
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.cpp b/source/common/shortyuv.cpp
 --- a/source/common/shortyuv.cpp	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/shortyuv.cpp	2026-07-01 10:38:19.990468947 +0100
 @@ -40,15 +40,26 @@
@@ -1447,6 +1543,7 @@
  }
  
  void ShortYuv::subtract(const Yuv& srcYuv0, const Yuv& srcYuv1, uint32_t log2Size, int picCsp)
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.h b/source/common/shortyuv.h
 --- a/source/common/shortyuv.h	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/shortyuv.h	2026-07-01 10:37:54.826398353 +0100
 @@ -41,8 +41,11 @@
@@ -1463,6 +1560,7 @@
  
      int      m_csp;
      int      m_hChromaShift;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.cpp b/source/common/yuv.cpp
 --- a/source/common/yuv.cpp	2026-06-26 15:31:47.464698315 +0100
 +++ b/source/common/yuv.cpp	2026-07-29 16:21:50.186063694 +0100
 @@ -29,6 +29,30 @@
@@ -1713,6 +1811,7 @@
  /* This version is intended for use by ME, which required FENC_STRIDE for luma fenc pixels */
  void Yuv::copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma)
  {
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.h b/source/common/yuv.h
 --- a/source/common/yuv.h	2026-06-26 15:31:47.464698315 +0100
 +++ b/source/common/yuv.h	2026-07-29 16:21:50.186063694 +0100
 @@ -49,11 +49,49 @@
@@ -1781,8 +1880,9 @@
      // Copy portion of srcYuv into ME prediction buffer
      void   copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma);
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/analysis.cpp b/source/encoder/analysis.cpp
 --- a/source/encoder/analysis.cpp	2026-06-26 15:31:47.468698327 +0100
-+++ b/source/encoder/analysis.cpp	2026-07-31 10:24:00.110391664 +0100
++++ b/source/encoder/analysis.cpp	2026-07-31 12:35:05.074757488 +0100
 @@ -101,14 +101,44 @@
      {
          ModeDepth &md = m_modeDepth[depth];
@@ -1923,9 +2023,63 @@
      /* Do not attempt to code a block larger than the largest block in the
       * co-located CTUs in L0 and L1 */
      int currentQP = parentCTU.m_qp[0];
+diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/entropy.h b/source/encoder/entropy.h
+--- a/source/encoder/entropy.h	2026-06-26 15:31:47.468698327 +0100
++++ b/source/encoder/entropy.h	2026-07-31 14:47:20.338263837 +0100
+@@ -210,6 +210,11 @@
+     /* these functions are only used to estimate the bits when cbf is 0 and will never be called when writing the bistream. */
+     inline void codeQtRootCbfZero() { encodeBin(0, m_contextState[OFF_QT_ROOT_CBF_CTX]); }
+ 
++    /* DM Phase 13: bits for load(this)+resetBits()+codeQtRootCbfZero()+
++     * getNumberOfWrittenBits() computed against this snapshot without the
++     * 160-byte context restore (bit-counting mode only). */
++    inline uint32_t bitsQtRootCbfZero() const { return bitsCodeBin(0, m_contextState[OFF_QT_ROOT_CBF_CTX]); }
++
+ private:
+ 
+     /* CABAC private methods */
+diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/encoder/search.cpp
 --- a/source/encoder/search.cpp	2026-06-26 15:31:47.468698327 +0100
-+++ b/source/encoder/search.cpp	2026-07-31 10:26:13.038785364 +0100
-@@ -342,7 +342,9 @@
++++ b/source/encoder/search.cpp	2026-07-31 14:47:20.338263837 +0100
+@@ -50,6 +50,10 @@
+ {
+     memset(m_rqt, 0, sizeof(m_rqt));
+ 
++    /* DM Phase 13: invalid memo until the first setLambdaFromQP() */
++    m_memoQp = m_memoLambdaQp = m_memoQuantQP = m_memoSliceType = INT_MIN;
++    m_memoEncData = NULL;
++
+     for (int i = 0; i < 3; i++)
+     {
+         m_qtTempTransformSkipFlag[i] = NULL;
+@@ -214,11 +218,26 @@
+ {
+     X265_CHECK(qp >= QP_MIN && qp <= QP_MAX_MAX, "QP used for lambda is out of range\n");
+ 
++    /* DM Phase 13: all state set below is a pure function of the memo key
++     * (m_me/m_rdCost/m_quant are not mutated between CTUs by anything else);
++     * skip the recomputation when nothing changed.  m_encData in the key
++     * invalidates across frames (covers m_slice, chroma QP offsets and
++     * Quant::m_nr's frame-encoder id). */
++    if (qp == m_memoQp && lambdaQp == m_memoLambdaQp &&
++        ctu.m_encData == m_memoEncData && m_slice->m_sliceType == m_memoSliceType)
++        return m_memoQuantQP;
++
+     m_me.setQP(qp);
+     m_rdCost.setQP(*m_slice, lambdaQp < 0 ? qp : lambdaQp);
+ 
+     int quantQP = x265_clip3(QP_MIN, QP_MAX_SPEC, qp);
+     m_quant.setQPforQuant(ctu, quantQP);
++
++    m_memoQp = qp;
++    m_memoLambdaQp = lambdaQp;
++    m_memoQuantQP = quantQP;
++    m_memoSliceType = m_slice->m_sliceType;
++    m_memoEncData = ctu.m_encData;
+     return quantQP;
+ }
+ 
+@@ -342,7 +361,9 @@
          const pixel* fenc = mode.fencYuv->getLumaAddr(absPartIdx);
          pixel*   pred     = mode.predYuv.getLumaAddr(absPartIdx);
          int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
@@ -1936,7 +2090,7 @@
  
          // init availability pattern
          uint32_t lumaPredMode = cu.m_lumaIntraDir[absPartIdx];
-@@ -350,8 +352,8 @@
+@@ -350,8 +371,8 @@
          initIntraNeighbors(cu, absPartIdx, tuDepth, true, &intraNeighbors);
          initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
  
@@ -1947,7 +2101,7 @@
  
          cu.setTransformSkipSubParts(0, TEXT_LUMA, absPartIdx, fullDepth);
          cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
-@@ -362,25 +364,26 @@
+@@ -362,25 +383,26 @@
          // store original entropy coding status
          if (bEnableRDOQ)
              m_entropyCoder.estBit(m_entropyCoder.m_estBitsSbac, log2TrSize, true);
@@ -1981,7 +2135,7 @@
  
          m_entropyCoder.resetBits();
          if (!absPartIdx)
-@@ -426,12 +429,12 @@
+@@ -426,12 +448,12 @@
  
          if (m_rdCost.m_psyRd)
          {
@@ -1996,7 +2150,7 @@
              fullCost.rdcost = m_rdCost.calcSsimRdCost(fullCost.distortion, fullCost.bits, fullCost.energy);
          }
          else
-@@ -536,7 +539,9 @@
+@@ -536,7 +558,9 @@
      const pixel* fenc = fencYuv->getLumaAddr(absPartIdx);
      pixel*   pred = predYuv->getLumaAddr(absPartIdx);
      int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
@@ -2007,7 +2161,7 @@
      uint32_t sizeIdx = log2TrSize - 2;
  
      // init availability pattern
-@@ -546,7 +551,7 @@
+@@ -546,7 +570,7 @@
      initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
  
      // get prediction signal
@@ -2016,7 +2170,7 @@
  
      cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
  
-@@ -573,16 +578,17 @@
+@@ -573,16 +597,17 @@
          bool tmpReconAlign = (useTSkip ? 1 : (m_rqt[qtLayer].reconQtYuv.getAddrOffset(absPartIdx, m_rqt[qtLayer].reconQtYuv.m_size) % 64 == 0));
          uint32_t tmpReconStride = (useTSkip ? MAX_TS_SIZE : reconQtStride);
  
@@ -2039,7 +2193,7 @@
          }
          else if (useTSkip)
          {
-@@ -592,9 +598,9 @@
+@@ -592,9 +617,9 @@
          }
          else
              // no residual coded, recon = pred
@@ -2051,7 +2205,7 @@
  
          cu.setTransformSkipSubParts(useTSkip, TEXT_LUMA, absPartIdx, fullDepth);
          cu.setCbfSubParts((!!numSig) << tuDepth, TEXT_LUMA, absPartIdx, fullDepth);
-@@ -645,12 +651,12 @@
+@@ -645,12 +670,12 @@
  
          if (m_rdCost.m_psyRd)
          {
@@ -2066,7 +2220,7 @@
              tmpCost = m_rdCost.calcSsimRdCost(tmpDist, tmpBits, tmpEnergy);
          }
          else
-@@ -711,7 +717,9 @@
+@@ -711,7 +736,9 @@
          const pixel* fenc = mode.fencYuv->getLumaAddr(absPartIdx);
          pixel*   pred     = mode.predYuv.getLumaAddr(absPartIdx);
          int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getLumaAddr(absPartIdx);
@@ -2077,7 +2231,7 @@
  
          // init availability pattern
          uint32_t lumaPredMode = cu.m_lumaIntraDir[absPartIdx];
-@@ -720,7 +728,7 @@
+@@ -720,7 +747,7 @@
          initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, lumaPredMode);
  
          // get prediction signal
@@ -2086,7 +2240,7 @@
  
          X265_CHECK(!cu.m_transformSkip[TEXT_LUMA][absPartIdx], "unexpected tskip flag in residualTransformQuantIntra\n");
          cu.setTUDepthSubParts(tuDepth, absPartIdx, fullDepth);
-@@ -729,26 +737,27 @@
+@@ -729,26 +756,27 @@
          coeff_t* coeffY       = cu.m_trCoeff[0] + coeffOffsetY;
  
          uint32_t sizeIdx   = log2TrSize - 2;
@@ -2120,7 +2274,7 @@
              cu.setCbfSubParts(0, TEXT_LUMA, absPartIdx, fullDepth);
          }
      }
-@@ -870,7 +879,9 @@
+@@ -870,7 +898,9 @@
  
      ShortYuv& resiYuv = m_rqt[cuGeom.depth].tmpResiYuv;
      uint32_t qtLayer = log2TrSize - 2;
@@ -2131,7 +2285,7 @@
      const uint32_t sizeIdxC = log2TrSizeC - 2;
  
      uint32_t curPartNum = cuGeom.numPartitions >> tuDepthC * 2;
-@@ -909,35 +920,36 @@
+@@ -909,35 +939,36 @@
              initAdiPatternChroma(cu, cuGeom, absPartIdxC, intraNeighbors, chromaId);
  
              // get prediction signal
@@ -2178,7 +2332,7 @@
  
              primitives.cu[sizeIdxC].copy_pp(picReconC, picStride, reconQt, reconQtStride);
          }
-@@ -983,7 +995,9 @@
+@@ -983,7 +1014,9 @@
              const pixel* fenc = mode.fencYuv->getChromaAddr(chromaId, absPartIdxC);
              pixel*   pred = mode.predYuv.getChromaAddr(chromaId, absPartIdxC);
              int16_t* residual = m_rqt[cuGeom.depth].tmpResiYuv.getChromaAddr(chromaId, absPartIdxC);
@@ -2189,7 +2343,7 @@
              const uint32_t sizeIdxC = log2TrSizeC - 2;
  
              uint32_t coeffOffsetC = absPartIdxC << (LOG2_UNIT_SIZE * 2 - (m_hChromaShift + m_vChromaShift));
-@@ -1001,7 +1015,7 @@
+@@ -1001,7 +1034,7 @@
                  chromaPredMode = g_chroma422IntraAngleMappingTable[chromaPredMode];
  
              // get prediction signal
@@ -2198,7 +2352,7 @@
  
              uint64_t bCost = MAX_INT64;
              sse_t bDist = 0;
-@@ -1016,17 +1030,18 @@
+@@ -1016,17 +1049,18 @@
                  pixel*   recon = (useTSkip ? m_tsRecon : reconQt);
                  uint32_t reconStride = (useTSkip ? MAX_TS_SIZE : reconQtStride);
  
@@ -2222,7 +2376,7 @@
                      cu.setCbfPartRange(1 << tuDepth, ttype, absPartIdxC, tuIterator.absPartIdxStep);
                  }
                  else if (useTSkip)
-@@ -1036,10 +1051,10 @@
+@@ -1036,10 +1070,10 @@
                  }
                  else
                  {
@@ -2235,7 +2389,7 @@
                  tmpDist = m_rdCost.scaleChromaDist(chromaId, tmpDist);
  
                  cu.setTransformSkipPartRange(useTSkip, ttype, absPartIdxC, tuIterator.absPartIdxStep);
-@@ -1056,12 +1071,12 @@
+@@ -1056,12 +1090,12 @@
                  uint64_t tmpCost;
                  if (m_rdCost.m_psyRd)
                  {
@@ -2250,7 +2404,7 @@
                      tmpCost = m_rdCost.calcSsimRdCost(tmpDist, tmpBits, tmpEnergy);
                  }
                  else
-@@ -1170,7 +1185,9 @@
+@@ -1170,7 +1204,9 @@
      }
  
      ShortYuv& resiYuv = m_rqt[cuGeom.depth].tmpResiYuv;
@@ -2261,7 +2415,7 @@
      const uint32_t sizeIdxC = log2TrSizeC - 2;
  
      uint32_t curPartNum = cuGeom.numPartitions >> tuDepthC * 2;
-@@ -1207,27 +1224,28 @@
+@@ -1207,27 +1243,28 @@
              initAdiPatternChroma(cu, cuGeom, absPartIdxC, intraNeighbors, chromaId);
  
              // get prediction signal
@@ -2297,7 +2451,7 @@
                  cu.setCbfPartRange(0, ttype, absPartIdxC, tuIterator.absPartIdxStep);
              }
          }
-@@ -1322,7 +1340,7 @@
+@@ -1322,7 +1359,7 @@
      initAdiPattern(cu, cuGeom, absPartIdx, intraNeighbors, ALL_IDX);
  
      const pixel* fenc = intraMode.fencYuv->m_buf[0];
@@ -2306,7 +2460,7 @@
  
      int sad, bsad;
      uint32_t bits, bbits, mode, bmode;
-@@ -1330,14 +1348,14 @@
+@@ -1330,14 +1367,14 @@
  
      // 33 Angle modes once
      int scaleTuSize = tuSize;
@@ -2323,7 +2477,7 @@
          fenc = m_fencScaled;
  
          pixel nScale[129];
-@@ -1368,8 +1386,13 @@
+@@ -1368,8 +1405,13 @@
      uint32_t rbits = getIntraRemModeBits(cu, absPartIdx, mpmModes, mpms);
  
      // DC
@@ -2339,7 +2493,7 @@
      bmode = mode = DC_IDX;
      bbits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
      bcost = m_rdCost.calcRdSADCost(bsad, bbits);
-@@ -1379,15 +1402,19 @@
+@@ -1379,15 +1421,19 @@
      if (tuSize & (8 | 16 | 32))
          planar = intraNeighbourBuf[1];
  
@@ -2362,7 +2516,7 @@
      {
          primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleStride);
          primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16)); 
-@@ -1562,10 +1589,12 @@
+@@ -1562,10 +1608,12 @@
  
                  // determine set of modes to be tested (using prediction signal only)
                  const pixel* fenc = fencYuv->getLumaAddr(absPartIdx);
@@ -2377,7 +2531,7 @@
                  int costShift = 0;
  
                  m_entropyCoder.loadIntraDirModeLuma(m_rqt[depth].cur);
-@@ -1582,9 +1611,12 @@
+@@ -1582,9 +1630,12 @@
                  uint64_t modeCosts[35];
  
                  // DC
@@ -2392,7 +2546,7 @@
                  modeCosts[DC_IDX] = bcost = m_rdCost.calcRdSADCost(sad, bits);
  
                  // PLANAR
-@@ -1592,16 +1624,16 @@
+@@ -1592,16 +1643,16 @@
                  if (tuSize >= 8 && tuSize <= 32)
                      planar = intraNeighbourBuf[1];
  
@@ -2412,7 +2566,7 @@
                      primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16));
                      for (int mode = 2; mode < 35; mode++)
                      {
-@@ -1609,7 +1641,7 @@
+@@ -1609,7 +1660,7 @@
                          if (mode < 18)
                              sad = sa8d(m_fencTransposed, scaleTuSize, &m_intraPredAngs[(mode - 2) * (scaleTuSize * scaleTuSize)], scaleTuSize) << costShift;
                          else
@@ -2421,7 +2575,7 @@
                          modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
                          COPY1_IF_LT(bcost, modeCosts[mode]);
                      }
-@@ -1621,7 +1653,7 @@
+@@ -1621,7 +1672,7 @@
                          bits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
                          int filter = !!(g_intraFilterFlags[mode] & scaleTuSize);
                          primitives.cu[sizeIdx].intra_pred[mode](m_intraPred, scaleTuSize, intraNeighbourBuf[filter], mode, scaleTuSize <= 16);
@@ -2430,7 +2584,7 @@
                          modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
                          COPY1_IF_LT(bcost, modeCosts[mode]);
                      }
-@@ -1749,9 +1781,9 @@
+@@ -1749,9 +1800,9 @@
              const pixel* fenc = fencYuv->m_buf[chromaId];
              pixel* pred = predYuv->m_buf[chromaId];
              Predict::initAdiPatternChroma(cu, cuGeom, 0, intraNeighbors, chromaId);
@@ -2443,7 +2597,7 @@
          }
  
          if (cost < bestCost)
-@@ -4593,6 +4625,10 @@
+@@ -4593,6 +4644,10 @@
      cu.clearCbf();
      cu.setTUDepthSubParts(0, 0, depth);
  
@@ -2454,7 +2608,7 @@
      reconYuv->copyFromYuv(interMode.predYuv);
  
      // Luma
-@@ -4682,8 +4718,8 @@
+@@ -4682,15 +4737,22 @@
          sse_t cbf0Dist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
          if (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400)
          {
@@ -2464,8 +2618,27 @@
 +            cbf0Dist += m_rdCost.scaleChromaDist(2, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[2], fencYuv->m_csize, predYuv->m_buf[2], predYuv->m_csize));
          }
  
-         /* Consider the RD cost of not signaling any residual */
-@@ -4754,10 +4790,17 @@
+-        /* Consider the RD cost of not signaling any residual */
+-        m_entropyCoder.load(m_rqt[depth].cur);
+-        m_entropyCoder.resetBits();
+-        m_entropyCoder.codeQtRootCbfZero();
+-        uint32_t cbf0Bits = m_entropyCoder.getNumberOfWrittenBits();
++        /* Consider the RD cost of not signaling any residual.
++         *
++         * DM Phase 13 (2026-07-31): this used to be
++         *     load(m_rqt[depth].cur); resetBits(); codeQtRootCbfZero();
++         *     cbf0Bits = getNumberOfWrittenBits();
++         * i.e. a full 160-byte context restore to code a single bin whose
++         * context updates are discarded (the next load below overwrites
++         * them).  In bit-counting mode that sequence computes exactly
++         *     ((cur.m_fracBits & 32767) + entropyBits[rootCbfCtx ^ 0]) >> 15
++         * which bitsCodeBin() evaluates directly against the saved
++         * snapshot — same value, no copy. */
++        uint32_t cbf0Bits = m_rqt[depth].cur.bitsQtRootCbfZero();
+ 
+         uint32_t cbf0Energy; uint64_t cbf0Cost;
+         if (m_rdCost.m_psyRd)
+@@ -4754,10 +4816,17 @@
  
      m_entropyCoder.store(interMode.contexts);
  
@@ -2484,7 +2657,7 @@
  
      // update with clipped distortion and cost (qp estimation loop uses unclipped values)
      sse_t bestLumaDist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size);
-@@ -4774,7 +4817,6 @@
+@@ -4774,7 +4843,6 @@
      else if(m_rdCost.m_ssimRd)
          interMode.ssimEnergy = m_quant.ssimDistortion(cu, fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size, cu.m_log2CUSize[0], TEXT_LUMA, 0);
  
@@ -2492,6 +2665,28 @@
      interMode.totalBits = bits;
      interMode.lumaDistortion = bestLumaDist;
      interMode.coeffBits = coeffBits;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.h b/source/encoder/search.h
+--- a/source/encoder/search.h	2026-06-26 15:31:47.468698327 +0100
++++ b/source/encoder/search.h	2026-07-31 14:47:20.338263837 +0100
+@@ -288,6 +288,17 @@
+ 
+     bool            m_vertRestriction;
+ 
++    /* DM Phase 13 (2026-07-31): setLambdaFromQP() runs once per CTU but its
++     * three callees (m_me/m_rdCost/m_quant setQP) are pure functions of
++     * (qp, lambdaQp, slice constants).  With a flat QP every call after the
++     * first per frame is redundant recomputation (~0.75 G cycles / 30 s
++     * clip).  Memo key: qp, lambdaQp, frame (encData), slice type. */
++    int             m_memoQp;
++    int             m_memoLambdaQp;
++    int             m_memoQuantQP;
++    int             m_memoSliceType;
++    const FrameData* m_memoEncData;
++
+ #if ENABLE_SCC_EXT
+     int             m_ibcEnabled;
+     int             m_numBVs;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/input/input.h b/source/input/input.h
 --- a/source/input/input.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/input.h	2026-07-29 16:32:49.820150021 +0100
 @@ -56,6 +56,19 @@
@@ -2537,6 +2732,7 @@
      virtual bool isEof() const = 0;
  
      virtual bool isFail() = 0;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.cpp b/source/input/yuv.cpp
 --- a/source/input/yuv.cpp	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/yuv.cpp	2026-07-29 16:32:49.820150021 +0100
 @@ -35,6 +35,14 @@
@@ -2786,6 +2982,7 @@
          return true;
      }
      else
+diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.h b/source/input/yuv.h
 --- a/source/input/yuv.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/yuv.h	2026-07-29 16:32:49.820150021 +0100
 @@ -54,25 +54,46 @@
@@ -2837,6 +3034,7 @@
      const char *getName() const                   { return "yuv"; }
  
      int getWidth() const                          { return width; }
+diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.cpp b/source/test/pixelharness.cpp
 --- a/source/test/pixelharness.cpp	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/test/pixelharness.cpp	2026-06-30 12:47:59.917468489 +0100
 @@ -2221,6 +2221,70 @@
@@ -2964,6 +3162,7 @@
      for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)
      {
          if (opt.integral_initv[k])
+diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.h b/source/test/pixelharness.h
 --- a/source/test/pixelharness.h	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/test/pixelharness.h	2026-06-30 12:47:59.921468499 +0100
 @@ -134,6 +134,8 @@
@@ -2975,6 +3174,7 @@
      bool check_integral_initv(integralv_t ref, integralv_t opt);
      bool check_integral_inith(integralh_t ref, integralh_t opt);
      bool check_ssimDist(ssimDistortion_t ref, ssimDistortion_t opt);
+diff -ruN -x build -x '*.o' -x '.git*' a/source/x265cli.cpp b/source/x265cli.cpp
 --- a/source/x265cli.cpp	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/x265cli.cpp	2026-07-29 16:32:49.824150033 +0100
 @@ -1009,6 +1009,58 @@
@@ -3036,6 +3236,7 @@
          for (int view = 0; view < param->numViews - !!param->format; view++)
              this->input[view]->startReader();
  
+diff -ruN -x build -x '*.o' -x '.git*' a/source/x265cli.h b/source/x265cli.h
 --- a/source/x265cli.h	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/x265cli.h	2026-07-29 16:32:49.824150033 +0100
 @@ -435,6 +435,11 @@
