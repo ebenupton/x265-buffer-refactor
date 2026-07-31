@@ -789,6 +789,41 @@ void Predict::fillReferenceSamples(const pixel* adiOrigin, intptr_t picStride, c
         int leftUnits = intraNeighbors.leftUnits;
         int unitWidth = intraNeighbors.unitWidth;
         int unitHeight = intraNeighbors.unitHeight;
+
+        /* DM Phase 15 (2026-07-31): for a whole-CTU block the below-left
+         * neighbours are in the next CTU row and never available, so the
+         * all-available fast path above almost never fires — every interior
+         * CTU lands here and pays the adiLineBuffer staging round-trip.  But
+         * the interior pattern is fixed: the only missing units are one run
+         * at the bottom of the left column, and HEVC substitution fills them
+         * with the bottom-most available left sample.  Detect exactly that
+         * pattern (leading-false run of length k, everything else available)
+         * and fill dst directly: corner+above+above-right are one contiguous
+         * row in the picture, the left column is a strided gather, the pad
+         * is a constant fill.  Identical output to the generic path. */
+        {
+            int k = 0;
+            while (k < leftUnits && !bNeighborFlags[k])
+                k++;
+            if (k > 0 && k < leftUnits && numIntraNeighbor == totalUnits - k)
+            {
+                const pixel* adiTemp = adiOrigin - picStride - 1;
+                memcpy(dst, adiTemp, refSize * sizeof(pixel));
+
+                int avail = (leftUnits - k) * unitHeight;
+                const pixel* left = adiOrigin - 1;
+                pixel* dstLeft = dst + refSize;
+                for (int i = 0; i < avail; i++)
+                {
+                    dstLeft[i] = *left;
+                    left += picStride;
+                }
+                pixel padVal = dstLeft[avail - 1];
+                for (int i = avail; i < (int)refSize - 1; i++)
+                    dstLeft[i] = padVal;
+                return;
+            }
+        }
         int totalSamples = (leftUnits * unitHeight) + ((aboveUnits + 1) * unitWidth);
         pixel adiLineBuffer[5 * MAX_CU_SIZE];
         pixel *adi;
