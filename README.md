@@ -18,6 +18,7 @@ Single-thread, 5 Mbps low-latency (per-phase A/B pairs):
 | + lowres NEON port, 1t | additional **−1.3 %** cycles |
 | + Phase 13 (data-movement audit cuts), 1t | additional **−2.8 %** cycles (−1.1 % at 4t) |
 | + Phase 14 (layout-specialised deblock BS), 1t | additional **−1.4 %** cycles (4t neutral) |
+| + Phase 15 (interior-CTU intra ref-sample fill), 1t | additional **−0.7 %** cycles |
 | + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 %** cycles |
 
 ### 4-thread realtime progression (measured stage-by-stage)
@@ -181,6 +182,7 @@ The refactor also uncovered and fixed three upstream stride bugs in
 | `f0618f1` | aarch64 NEON port of `frame_init_lowres_core` (lookahead lowres planes; `vrhaddq_u8` reproduces the C filter bit-exactly) |
 | `186a81e` | Phase 13 — data-movement audit cuts: border-extension NEON splat, write-only `m_distortion` gating, closed-form cbf0 signal bits, `setLambdaFromQP` memo |
 | `35c4de0` | Phase 14 — layout-specialised deblock BS: derive once per uniform CTU edge and splat, generic fallback for other layouts |
+| `fbb68a4` | Phase 15 — direct fill for the interior-CTU reference-sample pattern (below-left-missing-only), skipping the `adiLineBuffer` staging round-trip |
 
 See `docs/refactor/MEMORY-REFACTOR-PLAN.md` for the plan-of-record; individual investigation memos capture the reasoning at each fork.
 
