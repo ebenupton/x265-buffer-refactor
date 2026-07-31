@@ -144,6 +144,19 @@ one contiguous memcpy, one strided gather, one constant pad. Self-time
 1.47 % → 0.38 % (−1.8 G); whole-encode −0.7 % at 1t (4/4 clean pairs).
 Bit-exact.
 
+**Phase 16 (kept): TMVP sidecar.** The cross-frame variant of the same
+idea, and the counter-example to the rejected BS cache: here the replaced
+reads (three scattered lines of the collocated frame's per-part arrays)
+are genuinely DRAM-cold — reuse distance is a full frame — and HEVC's
+16x16 collocated-MV compression means one 24-byte record per unit
+captures everything `getCollocatedMV` reads (unit-base mv/refIdx/intra +
+per-part MODE_NONE bits). Filled at `copyToPic` (no `updatePic` refill
+needed: only the skip bit changes there); interior CTUs skip the
+noneMask bit loop. `getCollocatedMV` 1.25 % → 0.31 %,
+`getInterNeighbourMV` 1.00 % → 0.69 %, fill 0.13 %; whole-encode
+−0.3…−0.4 % at 1t. A cache pays when compression is high and the
+replaced reads are truly cold; the BS cache had neither.
+
 Remaining layout-specialisation candidates: AMVP/merge spatial-candidate
 collapse for uniform neighbour CTUs (~1–1.5 G, invasive — must reproduce
 exact candidate order), and flattening `compressInterCU_rd0_4`'s depth
