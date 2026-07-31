@@ -72,6 +72,35 @@ encode to ~5 %, and the rest of the gap to x264 is bought, not wasted.
 | gate status | | 3-config `--no-info` MD5 | **PASS** |
 
 Remaining candidates, descending value: entropy window-restore (~1 G),
-`getBoundaryStrength` table-driven rewrite (~1–2 G), `fillReferenceSamples`
-NEON gather (~0.5 G), lowres-init delta investigation (~1 G?), lowres
-margin shrink 48→32 (~0.4 G, needs MV-clamp proof).
+`fillReferenceSamples` NEON gather (~0.5 G), lowres margin shrink 48→32
+(~0.4 G, needs MV-clamp proof).
+
+## Follow-up: the two flagged deltas chased down (2026-07-31, later)
+
+Both flagged stages were investigated with targeted experiments (preserved
+in `../phase14-lowres-deblock-neutral.patch`, reverted after measurement).
+Both turned out to be **memory-latency costs, not instruction costs** —
+symbol-level A/B on each experiment measured zero:
+
+**Lowres init (6.9 G vs x264 4.7 G) — explained, not a defect.** The
+kernel runs at ~15 cyc/px against an instruction estimate of ~1.3 cyc/px:
+it is DRAM-bound on the two never-before-touched full-res source rows per
+output row plus four RFO store streams. Halving the deinterleave loads
+(`vext` carry instead of +2-byte reloads): 3.96 % → 3.94 %. Adding
+software prefetch of the next row pair: 3.97 %. The gap vs x264 is the
+flip side of zero-copy ingest: x264's `plane_copy` (4.9 G) pre-warms the
+fenc in L2/L3 immediately before its lowres pass reads it (~9.5 cyc/px);
+x265 deleted the warming copy, so the first consumer takes the cold
+misses. Combined ingest+lowres: x264 9.6 G, x265 ~7 G — the "delta" is
+banked profit surfacing in a different ledger row. No action.
+
+**`getBoundaryStrength` (3.0 G incl. `getPULeft/Above`) — bounded by
+metadata latency, not logic.** Hoisting the uniform Q side (intra flag,
+cbf, L0 ref, MV — constant across the 4 edge parts of a 2Nx2N/TU16 CU)
+into `deblockCU` and running a lean P-side-only helper moved exactly its
+savings into the caller: BS 1.65 % → 1.41 %, `deblockCU` 0.62 % → 0.86 %,
+net zero. The cost is cold loads of the *left/above CTU's* per-part arrays
+plus z-order neighbour derivation, which the hoist cannot avoid. A real
+cut needs a data-layout change (raster-order BS metadata, or a per-CTU
+edge cache built during commit while the arrays are hot) — deferred, est.
+~1 G for substantially more surgery.
