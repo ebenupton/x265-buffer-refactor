@@ -88,18 +88,52 @@ void Deblock::deblockCU(const CUData* cu, const CUGeom& cuGeom, const int32_t di
     }
 
     uint32_t numUnits = 1 << (cuGeom.log2CUSize - LOG2_UNIT_SIZE);
+
+    /* DM Phase 14 (2026-07-31): layout-specialised fast path.  When this CTU
+     * is a single 2Nx2N CU with a single TU (the dominant shape at CTU 16 in
+     * skip-heavy content) and the edge neighbour is too, every part on the CU
+     * edge sees identical BS inputs — one PU's intra flag / cbf / ref / MV on
+     * each side.  The only non-zero blockStrength entries the generic seed
+     * passes produce are that edge column (PU pass is a no-op for 2Nx2N, the
+     * TU pass marks only the CU edge, and the CU-edge pass overwrites it), so
+     * derive BS once at part 0 and splat it, skipping the per-part z-order
+     * scan entirely.  Falls back to the generic path for any other layout;
+     * decision logic is unchanged. */
+    if (!absPartIdx && !cu->m_cuDepth[0] && cu->m_partSize[0] == SIZE_2Nx2N && !cu->m_tuDepth[0])
+    {
+        const CUData* nb = (dir == EDGE_VER) ? cu->m_cuLeft : cu->m_cuAbove;
+        if (!nb || (!nb->m_cuDepth[0] && nb->m_partSize[0] == SIZE_2Nx2N && !nb->m_tuDepth[0]))
+        {
+            uint8_t seed = bsCuEdge(cu, 0, dir);
+            uint8_t bs = 0;
+            if (seed)
+            {
+                blockStrength[0] = seed; /* the >1 test in getBoundaryStrength reads it */
+                bs = getBoundaryStrength(cu, dir, 0, blockStrength);
+            }
+            setEdgefilterMultiple(0, dir, 0, bs, blockStrength, numUnits);
+            /* all other parts stay 0 from deblockCTU's memset, matching the
+             * generic passes for this layout */
+            goto filterEdges;
+        }
+    }
+
     setEdgefilterPU(cu, absPartIdx, dir, blockStrength, numUnits);
     setEdgefilterTU(cu, absPartIdx, 0, dir, blockStrength);
     setEdgefilterMultiple(absPartIdx, dir, 0, bsCuEdge(cu, absPartIdx, dir), blockStrength, numUnits);
 
-    uint32_t numParts = cuGeom.numPartitions;
-    for (uint32_t partIdx = absPartIdx; partIdx < absPartIdx + numParts; partIdx++)
     {
-        uint32_t bsCheck = !(partIdx & (1 << dir));
+        uint32_t numParts = cuGeom.numPartitions;
+        for (uint32_t partIdx = absPartIdx; partIdx < absPartIdx + numParts; partIdx++)
+        {
+            uint32_t bsCheck = !(partIdx & (1 << dir));
 
-        if (bsCheck && blockStrength[partIdx])
-            blockStrength[partIdx] = getBoundaryStrength(cu, dir, partIdx, blockStrength);
+            if (bsCheck && blockStrength[partIdx])
+                blockStrength[partIdx] = getBoundaryStrength(cu, dir, partIdx, blockStrength);
+        }
     }
+
+filterEdges:
 
     const uint32_t partIdxIncr = DEBLOCK_SMALLEST_BLOCK >> LOG2_UNIT_SIZE;
     uint32_t shiftFactor = (dir == EDGE_VER) ? cu->m_hChromaShift : cu->m_vChromaShift;
