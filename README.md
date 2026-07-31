@@ -78,9 +78,39 @@ this tree:
 
 The quality gain can instead be banked as bitrate: a rate sweep on the
 recommended config (4.0/4.2/4.4/4.6/5.0 Mbps, ~0.08 dB per 100 kbps) shows
-this tree matches upstream 4.1's 5 Mbps quality (42.714 dB) at **~3.9 Mbps —
-a ~22 % bitrate saving at equal PSNR**, and in fewer cycles than any 5 Mbps
-configuration measured.
+this tree matches upstream 4.1's 5 Mbps quality (42.714 dB) at **~4 Mbps —
+a ~20 % bitrate saving at equal PSNR**. That makes **4 Mbps the reference
+operating point** for this tree:
+
+| this tree + recommended config @ 4 Mbps, 4t | |
+|---|---|
+| PSNR | 42.70 dB — equal to upstream 4.1 @ 5 Mbps (42.71) |
+| speed | 35.0 fps (**1.17× realtime**) |
+| cycles | 220 G (upstream @ 5 Mbps: 250.8 G / 30.5 fps) |
+
+Equal quality, 20 % less bitrate, −12 % cycles, +15 % fps. The deltas hold on
+longer content: on a 90 s cut the combo config gains +0.90 dB at 5 Mbps and
+the ~3.9 Mbps point again matches base-config quality.
+
+### vs 10 Mbps H.264
+
+The original project goal was "5 Mbps H.265 on Pi 5 should look as good as
+10 Mbps H.264". Measured against x264 (ffmpeg libx264, `-tune zerolatency`,
+1 thread, same clip):
+
+| encoder / config | PSNR | achieved rate |
+|---|---|---|
+| x264 ultrafast @ 10 Mbps | 38.46 dB | 11.0 Mbps |
+| x264 superfast @ 10 Mbps | 42.95 dB | 10.9 Mbps |
+| this tree + recommended @ 4.2 Mbps | 42.94 dB | 4.1 Mbps |
+| this tree + recommended @ 5 Mbps | **43.58 dB** | 5.0 Mbps |
+
+x264's ultrafast preset drops CABAC and deblock and is not quality-
+competitive. Against the fair anchor — superfast, whose search shape (dia ME,
+subme 1, deblock, CABAC) matches this tree's recommended config — this tree
+delivers equal PSNR at **38 % of the bitrate (2.65× compression efficiency)**,
+or +0.62 dB at half the rate. (x264's zerolatency ABR also overshoots the
+target by ~10 %, while x265 lands within 1 %.)
 
 A follow-up audit of the lookahead (~14.5 % inclusive under zerolatency)
 found it fairly priced too: skipping lowres intra estimation on non-keyframes
