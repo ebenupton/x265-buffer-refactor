@@ -977,7 +977,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/CMakeLists.txt b/source/c
      set(C_SRCS_SVE sao-prim-sve.cpp dct-prim-sve.cpp)
 diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/common/cudata.cpp
 --- a/source/common/cudata.cpp	2026-06-26 15:31:47.452698281 +0100
-+++ b/source/common/cudata.cpp	2026-07-31 16:51:12.343238052 +0100
++++ b/source/common/cudata.cpp	2026-07-31 21:07:06.537770067 +0100
 @@ -278,6 +278,19 @@
      }
  }
@@ -1020,6 +1020,9 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 -    m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
 -    m_partSet(m_tqBypass,     (uint8_t)frame.m_encData->m_param->bLossless);
 -    if (m_slice->m_sliceType != I_SLICE)
+-    {
+-        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
+-        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
 +    bool bNeedPartInit = iparam->analysisLoad[0] || iparam->analysisSave[0] ||
 +        iparam->bAnalysisType != DEFAULT || iparam->bCTUInfo ||
 +        /* mvRefine defaults to 1 but is only consumed under analysisLoad/
@@ -1030,9 +1033,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 +        iparam->bEnableRdRefine || iparam->bOptCUDeltaQP;
 +
 +    if (bNeedPartInit)
-     {
--        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
--        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
++    {
 +        /* sequential memsets */
 +        m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
 +        m_partSet(m_log2CUSize,   (uint8_t)m_slice->m_param->maxLog2CUSize);
@@ -1104,9 +1105,6 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 +        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
 +        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
 +        m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
-+
-+        /* initialize the remaining CU data in one memset */
-+        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
  
 -    m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
 -    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
@@ -1119,6 +1117,9 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 -    /* initialize the remaining CU data in one memset */
 -    memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
 -    memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
++        /* initialize the remaining CU data in one memset */
++        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
++
 +        memcpy(tpl.buf, m_qp, initBytes);
 +        tpl.qp = qp;
 +        tpl.bytes = initBytes;
@@ -1132,7 +1133,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
  
  #if ENABLE_SCC_EXT
      if (lastIntraBCMv)
-@@ -493,47 +558,132 @@
+@@ -493,47 +558,193 @@
  {
      CUData& ctu = *m_encData->getPicCTU(m_cuAddr);
  
@@ -1153,11 +1154,6 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 -    m_partCopy(ctu.m_tuDepth + m_absIdxInCTU, m_tuDepth);
 -    m_partCopy(ctu.m_transformSkip[0] + m_absIdxInCTU, m_transformSkip[0]);
 -    m_partCopy(ctu.m_cbf[0] + m_absIdxInCTU, m_cbf[0]);
--
--    memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
--    memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
--    memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
--    memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
 +    /* Phase 6 (2026-07-02): at a full-CTU commit (m_absIdxInCTU == 0 and the
 +     * source has the same partition count as the target), the ~22 per-field
 +     * copy16/copy4 calls in the original body all hit contiguous regions of
@@ -1226,7 +1222,11 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 +            m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
 +        }
 +    }
-+
+ 
+-    memcpy(ctu.m_mv[0] + m_absIdxInCTU, m_mv[0], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mv[1] + m_absIdxInCTU, m_mv[1], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mvd[0] + m_absIdxInCTU, m_mvd[0], m_numPartitions * sizeof(MV));
+-    memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
 +    /* Phase 6b (2026-07-02): m_mv[0..1] + m_mvd[0..1] are laid out contiguously
 +     * in the shared mvMemBlock (see CUData::initialize) — at a full-CTU commit
 +     * with matching np, fold the four memcpys into one. */
@@ -1295,9 +1295,129 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
 +            memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
 +            memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
 +        }
++    }
++
++    fillTMVPRecords();  /* DM Phase 16 */
++}
++
++/* DM Phase 16 (2026-07-31): refresh the TMVP sidecar for this commit region
++ * while the source arrays are hot.  getCollocatedMV() reads the collocated
++ * frame at 16x16 (TMVP_UNIT_MASK) granularity: unit-base mv/refIdx/intra
++ * plus a per-part MODE_NONE test at the unmasked index — captured here as a
++ * bitmask.  Every part of every CTU flows through a commit (present parts
++ * directly, absent parts inside their split region), so all fields are
++ * rewritten each frame even on recycled FrameData. */
++void CUData::fillTMVPRecords() const
++{
++    TMVPRecord* recs = m_encData->m_tmvpRecords;
++    if (!recs)
++        return;
++
++    const uint32_t unitsPerCTU = m_encData->m_param->num4x4Partitions >> 4;
++    recs += m_cuAddr * unitsPerCTU;
++    uint32_t uFirst = m_absIdxInCTU >> 4;
++    uint32_t uLast = (m_absIdxInCTU + m_numPartitions - 1) >> 4;
++
++    /* MODE_NONE parts exist only in picture-boundary CTUs (~2 % of CTUs at
++     * 1080p); interior commits can store a zero mask without the bit loop. */
++    const SPS* sps = m_slice->m_sps;
++    uint32_t ctuSize = 1 << m_slice->m_param->maxLog2CUSize;
++    bool boundary = m_cuPelX + ctuSize > sps->picWidthInLumaSamples ||
++                    m_cuPelY + ctuSize > sps->picHeightInLumaSamples;
++
++    for (uint32_t u = uFirst; u <= uLast; u++)
++    {
++        TMVPRecord& r = recs[u];
++        int base = (int)(u << 4) - (int)m_absIdxInCTU; /* local index of the unit base */
++        if (base >= 0 && base < (int)m_numPartitions)
++        {
++            r.intra = (uint8_t)isIntra(base);
++            r.refIdx[0] = m_refIdx[0][base];
++            r.refIdx[1] = m_refIdx[1][base];
++            r.mv[0] = m_mv[0][base];
++            r.mv[1] = m_mv[1][base];
++        }
++
++        if (!boundary)
++        {
++            r.noneMask = 0;
++            continue;
++        }
++
++        uint32_t lo = X265_MAX(u << 4, m_absIdxInCTU);
++        uint32_t hi = X265_MIN((u << 4) + 16, m_absIdxInCTU + m_numPartitions);
++        uint16_t mask = r.noneMask;
++        for (uint32_t p = lo; p < hi; p++)
++        {
++            uint16_t bit = (uint16_t)(1 << (p & 15));
++            if (m_predMode[p - m_absIdxInCTU] == MODE_NONE)
++                mask |= bit;
++            else
++                mask &= (uint16_t)~bit;
++        }
++        r.noneMask = mask;
      }
  }
  
+@@ -620,6 +831,10 @@
+         memcpy(ctu.m_trCoeff[1] + tmpY2, m_trCoeff[1], sizeof(coeff_t) * tmpY);
+         memcpy(ctu.m_trCoeff[2] + tmpY2, m_trCoeff[2], sizeof(coeff_t) * tmpY);
+     }
++
++    /* DM Phase 16: no sidecar refill needed here — encodeResidue only clears
++     * the skip bit in predMode (neither isIntra nor MODE_NONE changes) and
++     * never touches mv/refIdx, so the copyToPic-time records stay valid. */
+ }
+ 
+ const CUData* CUData::getPULeft(uint32_t& lPartUnitIdx, uint32_t curPartUnitIdx) const
+@@ -2143,6 +2358,36 @@
+ bool CUData::getCollocatedMV(int cuAddr, int partUnitIdx, InterNeighbourMV *neighbour) const
+ {
+     const Frame* colPic = m_slice->m_refFrameList[m_slice->isInterB() && !m_slice->m_colFromL0Flag][m_slice->m_colRefIdx];
++
++    /* DM Phase 16: read the compact per-unit sidecar the collocated frame's
++     * commits filled (see fillTMVPRecords) instead of three scattered
++     * DRAM-cold lines of its per-part arrays.  Field-for-field identical to
++     * the generic path below. */
++    const TMVPRecord* recs = colPic->m_encData->m_tmvpRecords;
++    if (recs)
++    {
++        const TMVPRecord& r = recs[cuAddr * (int)(m_encData->m_param->num4x4Partitions >> 4) + (partUnitIdx >> 4)];
++        if (((r.noneMask >> (partUnitIdx & 15)) & 1) || r.intra)
++            return false;
++
++        for (int list = 0; list < 2; list++)
++        {
++            neighbour->cuAddr[list] = cuAddr;
++            int colRefPicList = m_slice->m_bCheckLDC ? list : m_slice->m_colFromL0Flag;
++            int colRefIdx = r.refIdx[colRefPicList];
++
++            if (colRefIdx < 0)
++                colRefPicList = !colRefPicList;
++
++            neighbour->refIdx[list] = r.refIdx[colRefPicList];
++            neighbour->refIdx[list] |= colRefPicList << 4;
++
++            neighbour->mv[list] = r.mv[colRefPicList];
++        }
++
++        return neighbour->unifiedRef != -1;
++    }
++
+     const CUData* colCU = colPic->m_encData->getPicCTU(cuAddr);
+ 
+     uint32_t absPartAddr = partUnitIdx & TMVP_UNIT_MASK;
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.h b/source/common/cudata.h
+--- a/source/common/cudata.h	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/cudata.h	2026-07-31 20:51:26.947130453 +0100
+@@ -261,6 +261,7 @@
+     void     copyPartFrom(const CUData& cu, const CUGeom& childGeom, uint32_t subPartIdx);
+     void     setEmptyPart(const CUGeom& childGeom, uint32_t subPartIdx);
+     void     copyToPic(uint32_t depth) const;
++    void     fillTMVPRecords() const;  /* DM Phase 16: refresh this commit region's TMVP sidecar */
+ 
+     /* RD-0 methods called only from encodeResidue */
+     void     copyFromPic(const CUData& ctu, const CUGeom& cuGeom, int csp, bool copyQp = true);
 diff -ruN -x build -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/common/deblock.cpp
 --- a/source/common/deblock.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/deblock.cpp	2026-07-31 19:51:24.820938328 +0100
@@ -1369,6 +1489,60 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/comm
          }
      }
  }
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.cpp b/source/common/framedata.cpp
+--- a/source/common/framedata.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/framedata.cpp	2026-07-31 20:51:08.643079331 +0100
+@@ -64,6 +64,8 @@
+         return false;
+     CHECKED_MALLOC_ZERO(m_cuStat, RCStatCU, sps.numCUsInFrame + 1);
+     CHECKED_MALLOC(m_rowStat, RCStatRow, sps.numCuInHeight);
++    /* DM Phase 16: TMVP sidecar, written at commit, read by later frames */
++    CHECKED_MALLOC_ZERO(m_tmvpRecords, TMVPRecord, sps.numCUsInFrame * (param.num4x4Partitions >> 4));
+     reinit(sps);
+     
+     for (int i = 0; i < INTEGRAL_PLANE_NUM; i++)
+@@ -105,6 +107,7 @@
+     }
+     X265_FREE(m_cuStat);
+     X265_FREE(m_rowStat);
++    X265_FREE(m_tmvpRecords);
+     for (int i = 0; i < INTEGRAL_PLANE_NUM; i++)
+     {
+         if (m_meBuffer[i] != NULL)
+diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.h b/source/common/framedata.h
+--- a/source/common/framedata.h	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/framedata.h	2026-07-31 20:51:03.071063773 +0100
+@@ -106,6 +106,22 @@
+  * no active references. They hold the Slice instance and the 'official' CTU
+  * data structures. They are maintained in a free-list pool along together with
+  * a reconstructed image PicYuv in order to conserve memory. */
++/* DM Phase 16 (2026-07-31): compact per-TMVP-unit record of everything
++ * getCollocatedMV() reads from a collocated frame.  HEVC compresses the
++ * collocated MV field to a 16x16 grid (TMVP_UNIT_MASK), so per 16-part unit
++ * the lookup needs only the unit-base MV/refIdx/intra flag plus the per-part
++ * MODE_NONE bits.  Filled at CTU commit while the arrays are hot; read a
++ * frame later when the original per-part arrays are DRAM-cold. */
++struct TMVPRecord
++{
++    MV       mv[2];       /* unit-base L0/L1 MVs */
++    int8_t   refIdx[2];   /* unit-base L0/L1 ref indices */
++    uint8_t  intra;       /* isIntra at the unit base */
++    uint8_t  pad;
++    uint16_t noneMask;    /* MODE_NONE bit per part within the unit */
++    uint16_t pad2;
++};
++
+ class FrameData
+ {
+ public:
+@@ -122,6 +138,7 @@
+ 
+     CUDataMemPool  m_cuMemPool;
+     CUData*        m_picCTU;
++    TMVPRecord*    m_tmvpRecords;  /* DM Phase 16: numCUsInFrame * (num4x4Partitions/16) */
+ 
+     RPS*           m_spsrps;
+     int            m_spsrpsIdx;
 diff -ruN -x build -x '*.o' -x '.git*' a/source/common/ipfilter.cpp b/source/common/ipfilter.cpp
 --- a/source/common/ipfilter.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/ipfilter.cpp	2026-07-31 14:47:20.338263837 +0100
