@@ -278,6 +278,19 @@ void CUData::initialize(const CUDataMemPool& dataPool, uint32_t depth, const x26
     }
 }
 
+/* DM Phase 13 (2026-07-31): the only reader of committed per-part distortion
+ * is Encoder::copyDistortionData (analysis-save / multi-pass / CTU-distortion-
+ * refine paths).  In a plain encode the pic-CTU m_distortion block is written
+ * (initCTU memset + copyToPic memcpy, both cold cache lines) and never read.
+ * Gate the zero-init and the commit on the features that consume it. */
+static inline bool needDistortionData(const x265_param* p)
+{
+    return p->analysisSave[0] || p->analysisLoad[0] ||
+           p->analysisMultiPassRefine || p->analysisMultiPassDistortion ||
+           p->ctuDistortionRefine || p->bDynamicRefine ||
+           p->rc.bStatWrite || p->rc.bStatRead;
+}
+
 void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t firstRowInSlice, uint32_t lastRowInSlice, uint32_t lastCuInSlice)
 {
     m_encData       = frame.m_encData;
@@ -345,7 +358,8 @@ void CUData::initCTU(const Frame& frame, uint32_t cuAddr, int qp, uint32_t first
     m_cuAbove = (m_cuAddr >= widthInCU) && !m_bFirstRowInSlice ? m_encData->getPicCTU(m_cuAddr - widthInCU) : NULL;
     m_cuAboveLeft = (m_cuLeft && m_cuAbove) ? m_encData->getPicCTU(m_cuAddr - widthInCU - 1) : NULL;
     m_cuAboveRight = (m_cuAbove && ((m_cuAddr % widthInCU) < (widthInCU - 1))) ? m_encData->getPicCTU(m_cuAddr - widthInCU + 1) : NULL;
-    memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
+    if (needDistortionData(iparam))
+        memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 }
 
 /* The per-part init block (m_qp .. m_chromaIntraDir) is one contiguous charBuf
@@ -414,7 +428,11 @@ void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp)
         tpl.bytes = initBytes;
         tpl.lossless = (uint8_t)m_encData->m_param->bLossless;
     }
-    memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
+    /* DM Phase 13: search writes m_distortion[0] on every candidate; entries
+     * 1..np-1 only matter to the gated distortion consumers (copyPartFrom
+     * aggregation feeding copyToPic, both gated). */
+    if (needDistortionData(m_encData->m_param))
+        memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
 
 #if ENABLE_SCC_EXT
     if (lastIntraBCMv)
@@ -624,7 +642,8 @@ void CUData::copyToPic(uint32_t depth) const
         memcpy(ctu.m_mvd[1] + m_absIdxInCTU, m_mvd[1], m_numPartitions * sizeof(MV));
     }
 
-    memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
+    if (needDistortionData(m_slice->m_param))
+        memcpy(ctu.m_distortion + m_absIdxInCTU, m_distortion, m_numPartitions * sizeof(sse_t));
 
     uint32_t tmpY = 1 << ((m_slice->m_param->maxLog2CUSize - depth) * 2);
     uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);

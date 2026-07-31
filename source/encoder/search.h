@@ -288,6 +288,17 @@ public:
 
     bool            m_vertRestriction;
 
+    /* DM Phase 13 (2026-07-31): setLambdaFromQP() runs once per CTU but its
+     * three callees (m_me/m_rdCost/m_quant setQP) are pure functions of
+     * (qp, lambdaQp, slice constants).  With a flat QP every call after the
+     * first per frame is redundant recomputation (~0.75 G cycles / 30 s
+     * clip).  Memo key: qp, lambdaQp, frame (encData), slice type. */
+    int             m_memoQp;
+    int             m_memoLambdaQp;
+    int             m_memoQuantQP;
+    int             m_memoSliceType;
+    const FrameData* m_memoEncData;
+
 #if ENABLE_SCC_EXT
     int             m_ibcEnabled;
     int             m_numBVs;

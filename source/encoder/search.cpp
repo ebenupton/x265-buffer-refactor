@@ -50,6 +50,10 @@ Search::Search()
 {
     memset(m_rqt, 0, sizeof(m_rqt));
 
+    /* DM Phase 13: invalid memo until the first setLambdaFromQP() */
+    m_memoQp = m_memoLambdaQp = m_memoQuantQP = m_memoSliceType = INT_MIN;
+    m_memoEncData = NULL;
+
     for (int i = 0; i < 3; i++)
     {
         m_qtTempTransformSkipFlag[i] = NULL;
@@ -214,11 +218,26 @@ int Search::setLambdaFromQP(const CUData& ctu, int qp, int lambdaQp)
 {
     X265_CHECK(qp >= QP_MIN && qp <= QP_MAX_MAX, "QP used for lambda is out of range\n");
 
+    /* DM Phase 13: all state set below is a pure function of the memo key
+     * (m_me/m_rdCost/m_quant are not mutated between CTUs by anything else);
+     * skip the recomputation when nothing changed.  m_encData in the key
+     * invalidates across frames (covers m_slice, chroma QP offsets and
+     * Quant::m_nr's frame-encoder id). */
+    if (qp == m_memoQp && lambdaQp == m_memoLambdaQp &&
+        ctu.m_encData == m_memoEncData && m_slice->m_sliceType == m_memoSliceType)
+        return m_memoQuantQP;
+
     m_me.setQP(qp);
     m_rdCost.setQP(*m_slice, lambdaQp < 0 ? qp : lambdaQp);
 
     int quantQP = x265_clip3(QP_MIN, QP_MAX_SPEC, qp);
     m_quant.setQPforQuant(ctu, quantQP);
+
+    m_memoQp = qp;
+    m_memoLambdaQp = lambdaQp;
+    m_memoQuantQP = quantQP;
+    m_memoSliceType = m_slice->m_sliceType;
+    m_memoEncData = ctu.m_encData;
     return quantQP;
 }
 
@@ -4722,11 +4741,18 @@ void Search::encodeResAndCalcRdInterCU(Mode& interMode, const CUGeom& cuGeom)
             cbf0Dist += m_rdCost.scaleChromaDist(2, primitives.chroma[m_csp].cu[sizeIdx].sse_pp(fencYuv->m_buf[2], fencYuv->m_csize, predYuv->m_buf[2], predYuv->m_csize));
         }
 
-        /* Consider the RD cost of not signaling any residual */
-        m_entropyCoder.load(m_rqt[depth].cur);
-        m_entropyCoder.resetBits();
-        m_entropyCoder.codeQtRootCbfZero();
-        uint32_t cbf0Bits = m_entropyCoder.getNumberOfWrittenBits();
+        /* Consider the RD cost of not signaling any residual.
+         *
+         * DM Phase 13 (2026-07-31): this used to be
+         *     load(m_rqt[depth].cur); resetBits(); codeQtRootCbfZero();
+         *     cbf0Bits = getNumberOfWrittenBits();
+         * i.e. a full 160-byte context restore to code a single bin whose
+         * context updates are discarded (the next load below overwrites
+         * them).  In bit-counting mode that sequence computes exactly
+         *     ((cur.m_fracBits & 32767) + entropyBits[rootCbfCtx ^ 0]) >> 15
+         * which bitsCodeBin() evaluates directly against the saved
+         * snapshot — same value, no copy. */
+        uint32_t cbf0Bits = m_rqt[depth].cur.bitsQtRootCbfZero();
 
         uint32_t cbf0Energy; uint64_t cbf0Cost;
         if (m_rdCost.m_psyRd)

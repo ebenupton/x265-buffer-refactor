@@ -28,6 +28,10 @@
 #include "primitives.h"
 #include "x265.h"
 
+#if defined(__aarch64__) && !HIGH_BIT_DEPTH
+#include <arm_neon.h>
+#endif
+
 using namespace X265_NS;
 
 #if _MSC_VER
@@ -67,6 +71,31 @@ static void extendCURowColBorder(pixel* txt, intptr_t stride, int width, int hei
             txt[width + x] = txt[width - 1];
         }
 
+#elif defined(__aarch64__)
+        /* DM Phase 13 (2026-07-31): the margins here are small (48-128
+         * bytes), so the two per-row libc memset calls were dominated by
+         * call/dispatch overhead — at 1080p this function burned ~1.5 G
+         * cycles per 30 s clip between the lowres hpel planes and the recon
+         * border.  Splat the edge pixels with NEON stores instead; margins
+         * are always multiples of 8 (g_maxCUSize + 32 and its chroma/lowres
+         * halvings).  Same bytes written, no calls. */
+        {
+            uint8x16_t l = vdupq_n_u8(txt[0]);
+            uint8x16_t r = vdupq_n_u8(txt[width - 1]);
+            pixel* pl = txt - marginX;
+            pixel* pr = txt + width;
+            int x = 0;
+            for (; x + 16 <= marginX; x += 16)
+            {
+                vst1q_u8(pl + x, l);
+                vst1q_u8(pr + x, r);
+            }
+            if (x < marginX)
+            {
+                vst1_u8(pl + x, vget_low_u8(l));
+                vst1_u8(pr + x, vget_low_u8(r));
+            }
+        }
 #else
         memset(txt - marginX, txt[0], marginX);
         memset(txt + width, txt[width - 1], marginX);
