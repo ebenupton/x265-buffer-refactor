@@ -6,16 +6,75 @@ Buffer-flow refactor of the [x265](https://bitbucket.org/multicoreware/x265_git)
 
 ## Headline numbers (bbb_30s_1080p30, Pi 5 @ 2.4 GHz)
 
+Single-thread, 5 Mbps low-latency (per-phase A/B pairs):
+
 | workload | vs upstream 4.1 |
 |---|---|
-| 1t 5 Mbps LL (mean of 4 pairs, Phases 1–6b) | **−2.7 %** |
-| 4t 5 Mbps realtime (mean of 4 pairs, Phases 1–6b) | **−4.3 %** |
+| 1t 5 Mbps LL, Phases 1–6b | **−2.7 %** |
 | top-func plumbing time (`memcpy` + `blockcopy_pp_*` + `memset`) | **−2.9 pp** self-time |
-| + Phases 8–10 (ingest rework), 1t 5 Mbps LL | additional **−4.6 %** cycles |
-| + Phases 8–10, 4t 5 Mbps realtime | additional **−5.8 %** cycles, 29.3 → **31.4 fps** |
-| + Phase 11 (cbf-gated coeff commit), 1t 5 Mbps LL | additional **−1.4 %** cycles |
-| + Phase 11, 4t 5 Mbps realtime | additional **−4.9 %** cycles, 31.6 → **33.2 fps** |
-| + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 % / −2.1 %** cycles |
+| + Phases 8–10 (ingest rework), 1t | additional **−4.6 %** cycles |
+| + Phase 11 (cbf-gated coeff commit), 1t | additional **−1.4 %** cycles |
+| + Phase 12 (dead search-work cut), 1t | additional **−8.9 %** cycles |
+| + lowres NEON port, 1t | additional **−1.3 %** cycles |
+| + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 %** cycles |
+
+### 4-thread realtime progression (measured stage-by-stage)
+
+Every stage built from its commit and measured in one interleaved round-robin
+session (4–6 runs per stage, thermal gaps, active cooling; cycles are
+`perf stat` user cycles over all threads; raw data in
+`docs/refactor/prog4t-results-2026-07-29.csv`, both sessions appended):
+
+| stage | cycles | fps |
+|---|---|---|
+| upstream 4.1 | 250.8 G | 30.5 |
+| + deblock NEON port | 248.6 G | 30.8 |
+| + Phases 1–7 (scratch-buffer refactor) | 251.6 G | 30.4 |
+| + Phase 8 (skip pic-CTU init) | 251.6 G | 30.4 |
+| + Phase 9 (zero-copy CLI ingest) | 243.9 G | 31.3 |
+| + Phase 10 (direct `readv()` ingest) | 231.0 G | 33.1 |
+| + Phase 11 (cbf-gated coeff commit) | **223.7 G** | **34.0** |
+
+Net 4t: **−10.8 % cycles, 30.5 → 34.0 fps (1.13× realtime)**. The 4t win is
+carried by the ingest/commit phases (9–11) plus the deblock port; the
+scratch-buffer refactor (Phases 1–7) is a **1t optimisation** — it measures
+neutral-to-slightly-negative (~+1 %) at 4t, where frame-thread parallelism
+hides the scratch-copy memory traffic it removes. (An earlier revision of
+this README claimed −4.3 % at 4t for Phases 1–6b from cross-session wall-time
+pairs; the stronger interleaved methodology does not reproduce that, and the
+claim is withdrawn.)
+
+### Phase 12 + search-budget audit (2026-07-31)
+
+After the data-movement work closed, a cycles-vs-PSNR audit of the remaining
+*search* spend found two more bit-exact cuts (MD5 gate passes at all three
+configs; interleaved same-session A/B pairs):
+
+| stage | 1t cycles | 4t cycles / fps |
+|---|---|---|
+| Phase 11 | 190.6 G | 222.6 G / ~34.0 |
+| + Phase 12 (`topSkipMinDepth` bypass at ctu16, per-mode intra under fast-intra) | 173.6 G (**−8.9 %**) | 206.7 G (**−7.1 %**) / ~35.5 |
+| + lowres NEON port (`frame_init_lowres_core`) | 171.5 G (**−1.3 %**) | wash / +0.3 fps |
+
+(Absolute 4t cycle counts drift a few % between thermal sessions; the
+percentages are same-session pairs.)
+
+The audit also priced each search knob (ΔPSNR at fixed 5 Mbps, bbb 1080p30):
+`--subme 1` is the best spend in the encoder (+0.75 dB for +4 % cycles),
+`--max-merge 2` is free (+0.09 dB, −1.5 %), while `--subme 2`, `--max-merge 3`
+and `--rd 2` (+0.003 dB for +25 %!) buy nothing. Intra-in-inter search costs
+~9 % and buys 1.07 dB — the best-value large item; even a mild inter-cost gate
+on it loses more dB than the cycles are worth. Recommended realtime config on
+this tree:
+
+```
+--subme 1 --max-merge 2 --merange 8   (on top of the ultrafast/zerolatency base)
+```
+
+| | 4t cycles | fps | PSNR |
+|---|---|---|---|
+| upstream 4.1, base config | 250.8 G | 30.5 | 42.71 dB |
+| this tree + recommended config | 226.4 G | 33.7 | **43.58 dB** |
 
 ### Data-movement parity with x264
 
@@ -62,6 +121,8 @@ The refactor also uncovered and fixed three upstream stride bugs in
 | `77d15cc` | Phase 9 — zero-copy CLI frame ingest (encoder reads the file thread's ring buffer in place) |
 | `aeb83c3` | Phase 10 — direct ingest: the CLI lays its ring slots out in fenc geometry and `readv()` scatters packed file rows straight into strided position; the encoder aliases the slots via x265's dormant `bCopyPicToFrame=0` path, eliminating `copyFromPicture` entirely |
 | `eb05229` | Phase 11 — skip cbf-0 coefficient planes at `CUData::copyToPic` commit (768B of the ~1.5KB per-commit traffic, paid even for skip CUs; coeffs are only ever read under cbf gates) |
+| `c426372` | Phase 12 — cut dead search work: `topSkipMinDepth` early-out at 16x16 CTUs; per-mode intra generation under fast-intra (sa8d is transpose-invariant, decisions identical) |
+| `f0618f1` | aarch64 NEON port of `frame_init_lowres_core` (lookahead lowres planes; `vrhaddq_u8` reproduces the C filter bit-exactly) |
 
 See `docs/refactor/MEMORY-REFACTOR-PLAN.md` for the plan-of-record; individual investigation memos capture the reasoning at each fork.
 
