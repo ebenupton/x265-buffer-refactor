@@ -165,13 +165,34 @@ asking once or twice, so a per-object memo has nothing to reuse. Sharing
 across objects needs per-thread keying machinery out of proportion to
 the ~0.5 G ceiling. Rejected.
 
-Remaining candidates, none cheap: entropy skip-path context derivation
-(~0.35 %, delicate choreography in encodeResAndCalcRd*), AMVP/merge
-spatial-candidate collapse for uniform neighbour CTUs (~1–1.5 G,
-invasive — must reproduce exact candidate order), and flattening
-`compressInterCU_rd0_4`'s depth recursion for depth≤1 (largest, most
-invasive). The safe, high-yield layout cuts are exhausted: of the last
-five experiments two were kept (Phases 15, 16) and three rejected as
-washes — the curve has reached its knee, and what remains is either
-structural (CABAC RDO, quad-tree metadata generality) or priced search
-work.
+**Phase 17 (kept): entropy direct-coding.** The skip candidate's signal
+bins and the inter candidate's signal-bits tail are now coded directly
+into `interMode.contexts` (seeded from the rqt snapshot) instead of the
+load → code on `m_entropyCoder` → store round-trip: one 166-byte context
+copy instead of two per candidate, identical states and bit counts.
+`copyFrom` 0.58 % → 0.47 % (~−0.2 G). The remaining context copies are
+`estimateResidualQT`'s internal rqt store/loads, which carry live RDO
+state — justified.
+
+**Two more rejections closing the sweep.** (1) A hot-scalar reorder in
+`Analysis` (moving `m_evaluateInter` etc. ahead of the 600 KB
+`m_modeDepth` array) chased a 36 %-of-function annotation hotspot that
+turned out to be **sampling skid across the `topSkipMinDepth` return** —
+the real misses are that heuristic's reads of neighbouring CTUs' RC
+stats (paid-for Phase-12 work). The reorder measured +1.3 % (layout
+side-effects) and was reverted; lesson: annotate-level attribution near
+call returns needs skid correction before acting. (2) The
+`getCtxSkipFlag` memo (above).
+
+**Closing state of the sweep (Phases 13–17).** Cumulative ≈ −5.5 % at
+1t, every cut bit-exact at the three gate configs. Of eleven
+experiments, six kept and five rejected with post-mortems. The remaining
+per-CU costs are now attributed: `compressInterCU_rd0_4`/
+`processRowEncoder` self-time is CTU-granular working-set turnover
+around paid-for decisions (topSkipMinDepth's stat reads, RC bookkeeping,
+row-context loads); entropy copies carry live RDO state; and everything
+larger is standard-mandated or dB-priced search work per the ledger
+above. Flab, as far as this profile resolves it, is dead. What would
+move the needle from here is architectural: raster-order committed
+metadata, or restructuring mode decision to x264's alias model beyond
+what `phase12-merge-alias-rejected.patch` attempted.

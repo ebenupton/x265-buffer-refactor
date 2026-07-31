@@ -1,4 +1,4 @@
-diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.cpp b/source/abrEncApp.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/abrEncApp.cpp b/source/abrEncApp.cpp
 --- a/source/abrEncApp.cpp	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/abrEncApp.cpp	2026-07-29 16:32:49.820150021 +0100
 @@ -177,7 +177,10 @@
@@ -129,7 +129,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.cpp b/source/abrEncApp
  #if ENABLE_ALPHA
                      if (m_parentEnc->m_param->numScalableLayers > 1)
                      {
-diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.h b/source/abrEncApp.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/abrEncApp.h b/source/abrEncApp.h
 --- a/source/abrEncApp.h	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/abrEncApp.h	2026-07-29 16:32:49.820150021 +0100
 @@ -78,6 +78,10 @@
@@ -143,7 +143,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/abrEncApp.h b/source/abrEncApp.h
  
          int m_threadActive;
          int m_lastIdx;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/asm-primitives.cpp b/source/common/aarch64/asm-primitives.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/asm-primitives.cpp b/source/common/aarch64/asm-primitives.cpp
 --- a/source/common/aarch64/asm-primitives.cpp	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/common/aarch64/asm-primitives.cpp	2026-07-01 13:58:44.061715257 +0100
 @@ -582,7 +582,8 @@
@@ -173,7 +173,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/asm-primitives.cp
          setupIntraPrimitives_neon(p);
          setupSaoPrimitives_neon(p);
      }
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/deblock-prim.cpp b/source/common/aarch64/deblock-prim.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/deblock-prim.cpp b/source/common/aarch64/deblock-prim.cpp
 --- a/source/common/aarch64/deblock-prim.cpp	1970-01-01 01:00:00.000000000 +0100
 +++ b/source/common/aarch64/deblock-prim.cpp	2026-06-30 12:47:59.825468245 +0100
 @@ -0,0 +1,456 @@
@@ -633,7 +633,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/deblock-prim.cpp 
 +} /* namespace X265_NS */
 +
 +#endif
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/fun-decls.h b/source/common/aarch64/fun-decls.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/fun-decls.h b/source/common/aarch64/fun-decls.h
 --- a/source/common/aarch64/fun-decls.h	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/fun-decls.h	2026-07-01 13:59:51.849915787 +0100
 @@ -169,10 +169,10 @@
@@ -662,7 +662,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/fun-decls.h b/sou
  
  void PFX(scale1D_128to64_sve2(pixel *dst, const pixel *src));
  void PFX(scale2D_64to32_sve2(pixel* dst, const pixel* src, intptr_t stride));
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/loopfilter-prim.h b/source/common/aarch64/loopfilter-prim.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/loopfilter-prim.h b/source/common/aarch64/loopfilter-prim.h
 --- a/source/common/aarch64/loopfilter-prim.h	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/loopfilter-prim.h	2026-06-30 12:47:59.813468214 +0100
 @@ -9,6 +9,7 @@
@@ -673,7 +673,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/loopfilter-prim.h
  
  };
  
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-prim.cpp b/source/common/aarch64/pixel-prim.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/pixel-prim.cpp b/source/common/aarch64/pixel-prim.cpp
 --- a/source/common/aarch64/pixel-prim.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-prim.cpp	2026-07-31 16:12:22.015769434 +0100
 @@ -1482,7 +1482,8 @@
@@ -759,7 +759,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-prim.cpp b/
  
  }
  
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util.S b/source/common/aarch64/pixel-util.S
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util.S b/source/common/aarch64/pixel-util.S
 --- a/source/common/aarch64/pixel-util.S	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-util.S	2026-07-01 13:57:31.637500652 +0100
 @@ -97,64 +97,66 @@
@@ -859,7 +859,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util.S b/so
  .endr
      cbnz            w12, .Loop_residual_32
      ret
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util-sve2.S b/source/common/aarch64/pixel-util-sve2.S
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util-sve2.S b/source/common/aarch64/pixel-util-sve2.S
 --- a/source/common/aarch64/pixel-util-sve2.S	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/aarch64/pixel-util-sve2.S	2026-07-01 13:58:13.533624846 +0100
 @@ -230,22 +230,25 @@
@@ -963,7 +963,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/aarch64/pixel-util-sve2.S
  .endr
      ret
  endfunc
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/CMakeLists.txt b/source/common/CMakeLists.txt
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/CMakeLists.txt b/source/common/CMakeLists.txt
 --- a/source/common/CMakeLists.txt	2026-06-26 15:31:47.448698270 +0100
 +++ b/source/common/CMakeLists.txt	2026-06-30 12:47:59.893468425 +0100
 @@ -104,7 +104,7 @@
@@ -975,9 +975,9 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/CMakeLists.txt b/source/c
      set(C_SRCS_NEON_DOTPROD filter-neon-dotprod.cpp)
      set(C_SRCS_NEON_I8MM filter-neon-i8mm.cpp)
      set(C_SRCS_SVE sao-prim-sve.cpp dct-prim-sve.cpp)
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/common/cudata.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/common/cudata.cpp
 --- a/source/common/cudata.cpp	2026-06-26 15:31:47.452698281 +0100
-+++ b/source/common/cudata.cpp	2026-07-31 21:07:06.537770067 +0100
++++ b/source/common/cudata.cpp	2026-07-31 22:33:56.316473543 +0100
 @@ -278,6 +278,19 @@
      }
  }
@@ -1407,9 +1407,9 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.cpp b/source/commo
      const CUData* colCU = colPic->m_encData->getPicCTU(cuAddr);
  
      uint32_t absPartAddr = partUnitIdx & TMVP_UNIT_MASK;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.h b/source/common/cudata.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/cudata.h b/source/common/cudata.h
 --- a/source/common/cudata.h	2026-06-26 15:31:47.452698281 +0100
-+++ b/source/common/cudata.h	2026-07-31 20:51:26.947130453 +0100
++++ b/source/common/cudata.h	2026-07-31 22:33:56.316473543 +0100
 @@ -261,6 +261,7 @@
      void     copyPartFrom(const CUData& cu, const CUGeom& childGeom, uint32_t subPartIdx);
      void     setEmptyPart(const CUGeom& childGeom, uint32_t subPartIdx);
@@ -1418,7 +1418,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/cudata.h b/source/common/
  
      /* RD-0 methods called only from encodeResidue */
      void     copyFromPic(const CUData& ctu, const CUGeom& cuGeom, int csp, bool copyQp = true);
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/common/deblock.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/common/deblock.cpp
 --- a/source/common/deblock.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/deblock.cpp	2026-07-31 19:51:24.820938328 +0100
 @@ -88,19 +88,53 @@
@@ -1489,7 +1489,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/deblock.cpp b/source/comm
          }
      }
  }
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.cpp b/source/common/framedata.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/framedata.cpp b/source/common/framedata.cpp
 --- a/source/common/framedata.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/framedata.cpp	2026-07-31 20:51:08.643079331 +0100
 @@ -64,6 +64,8 @@
@@ -1509,7 +1509,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.cpp b/source/co
      for (int i = 0; i < INTEGRAL_PLANE_NUM; i++)
      {
          if (m_meBuffer[i] != NULL)
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.h b/source/common/framedata.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/framedata.h b/source/common/framedata.h
 --- a/source/common/framedata.h	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/framedata.h	2026-07-31 20:51:03.071063773 +0100
 @@ -106,6 +106,22 @@
@@ -1543,7 +1543,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/framedata.h b/source/comm
  
      RPS*           m_spsrps;
      int            m_spsrpsIdx;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/ipfilter.cpp b/source/common/ipfilter.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/ipfilter.cpp b/source/common/ipfilter.cpp
 --- a/source/common/ipfilter.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/ipfilter.cpp	2026-07-31 14:47:20.338263837 +0100
 @@ -28,6 +28,10 @@
@@ -1589,7 +1589,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/ipfilter.cpp b/source/com
  #else
          memset(txt - marginX, txt[0], marginX);
          memset(txt + width, txt[width - 1], marginX);
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/loopfilter.cpp b/source/common/loopfilter.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/loopfilter.cpp b/source/common/loopfilter.cpp
 --- a/source/common/loopfilter.cpp	2026-06-26 15:31:47.452698281 +0100
 +++ b/source/common/loopfilter.cpp	2026-06-30 12:47:59.837468277 +0100
 @@ -172,6 +172,47 @@
@@ -1648,7 +1648,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/loopfilter.cpp b/source/c
 +    p.pelFilterLumaWeak[1]   = pelFilterLumaWeak_c;
  }
  }
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/pixel.cpp b/source/common/pixel.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/pixel.cpp b/source/common/pixel.cpp
 --- a/source/common/pixel.cpp	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/pixel.cpp	2026-07-02 10:05:24.029263413 +0100
 @@ -368,6 +368,7 @@
@@ -1681,7 +1681,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/pixel.cpp b/source/common
      }
  }
  
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/predict.cpp b/source/common/predict.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/predict.cpp b/source/common/predict.cpp
 --- a/source/common/predict.cpp	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/predict.cpp	2026-07-31 20:22:24.094648501 +0100
 @@ -789,6 +789,41 @@
@@ -1726,7 +1726,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/predict.cpp b/source/comm
          int totalSamples = (leftUnits * unitHeight) + ((aboveUnits + 1) * unitWidth);
          pixel adiLineBuffer[5 * MAX_CU_SIZE];
          pixel *adi;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/primitives.h b/source/common/primitives.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/primitives.h b/source/common/primitives.h
 --- a/source/common/primitives.h	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/primitives.h	2026-07-02 10:05:40.029305573 +0100
 @@ -154,7 +154,13 @@
@@ -1763,7 +1763,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/primitives.h b/source/com
  
      integralv_t            integral_initv[NUM_INTEGRAL_SIZE];
      integralh_t            integral_inith[NUM_INTEGRAL_SIZE];
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.cpp b/source/common/shortyuv.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/shortyuv.cpp b/source/common/shortyuv.cpp
 --- a/source/common/shortyuv.cpp	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/shortyuv.cpp	2026-07-01 10:38:19.990468947 +0100
 @@ -40,15 +40,26 @@
@@ -1821,7 +1821,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.cpp b/source/com
  }
  
  void ShortYuv::subtract(const Yuv& srcYuv0, const Yuv& srcYuv1, uint32_t log2Size, int picCsp)
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.h b/source/common/shortyuv.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/shortyuv.h b/source/common/shortyuv.h
 --- a/source/common/shortyuv.h	2026-06-26 15:31:47.456698292 +0100
 +++ b/source/common/shortyuv.h	2026-07-01 10:37:54.826398353 +0100
 @@ -41,8 +41,11 @@
@@ -1838,7 +1838,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/shortyuv.h b/source/commo
  
      int      m_csp;
      int      m_hChromaShift;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.cpp b/source/common/yuv.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/yuv.cpp b/source/common/yuv.cpp
 --- a/source/common/yuv.cpp	2026-06-26 15:31:47.464698315 +0100
 +++ b/source/common/yuv.cpp	2026-07-29 16:21:50.186063694 +0100
 @@ -29,6 +29,30 @@
@@ -2089,7 +2089,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.cpp b/source/common/y
  /* This version is intended for use by ME, which required FENC_STRIDE for luma fenc pixels */
  void Yuv::copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma)
  {
-diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.h b/source/common/yuv.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/common/yuv.h b/source/common/yuv.h
 --- a/source/common/yuv.h	2026-06-26 15:31:47.464698315 +0100
 +++ b/source/common/yuv.h	2026-07-29 16:21:50.186063694 +0100
 @@ -49,11 +49,49 @@
@@ -2158,7 +2158,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/common/yuv.h b/source/common/yuv
      // Copy portion of srcYuv into ME prediction buffer
      void   copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma);
  
-diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/analysis.cpp b/source/encoder/analysis.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/encoder/analysis.cpp b/source/encoder/analysis.cpp
 --- a/source/encoder/analysis.cpp	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/encoder/analysis.cpp	2026-07-31 12:35:05.074757488 +0100
 @@ -101,14 +101,44 @@
@@ -2301,7 +2301,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/analysis.cpp b/source/en
      /* Do not attempt to code a block larger than the largest block in the
       * co-located CTUs in L0 and L1 */
      int currentQP = parentCTU.m_qp[0];
-diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/entropy.h b/source/encoder/entropy.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/encoder/entropy.h b/source/encoder/entropy.h
 --- a/source/encoder/entropy.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/encoder/entropy.h	2026-07-31 14:47:20.338263837 +0100
 @@ -210,6 +210,11 @@
@@ -2316,9 +2316,9 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/entropy.h b/source/encod
  private:
  
      /* CABAC private methods */
-diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/encoder/search.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/encoder/search.cpp
 --- a/source/encoder/search.cpp	2026-06-26 15:31:47.468698327 +0100
-+++ b/source/encoder/search.cpp	2026-07-31 14:47:20.338263837 +0100
++++ b/source/encoder/search.cpp	2026-07-31 23:36:51.349365392 +0100
 @@ -50,6 +50,10 @@
  {
      memset(m_rqt, 0, sizeof(m_rqt));
@@ -2886,7 +2886,45 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/enco
      reconYuv->copyFromYuv(interMode.predYuv);
  
      // Luma
-@@ -4682,15 +4737,22 @@
+@@ -4607,14 +4662,21 @@
+         interMode.distortion += interMode.chromaDistortion;
+     }
+     cu.m_distortion[0] = interMode.distortion;
+-    m_entropyCoder.load(m_rqt[depth].cur);
+-    m_entropyCoder.resetBits();
++    /* DM Phase 17 (2026-07-31): code the skip candidate's few signal bins
++     * directly into interMode.contexts instead of the old
++     * load(cur) -> code on m_entropyCoder -> store(contexts) round-trip,
++     * saving one full 166-byte context copy per skip candidate.  The final
++     * contexts state and every bit count are identical; m_entropyCoder is
++     * simply left stale, which is safe because every later user loads a
++     * snapshot before coding. */
++    interMode.contexts.load(m_rqt[depth].cur);
++    interMode.contexts.resetBits();
+     if (m_slice->m_pps->bTransquantBypassEnabled)
+-        m_entropyCoder.codeCUTransquantBypassFlag(cu.m_tqBypass[0]);
+-    m_entropyCoder.codeSkipFlag(cu, 0);
+-    int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
+-    m_entropyCoder.codeMergeIndex(cu, 0);
+-    interMode.mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
++        interMode.contexts.codeCUTransquantBypassFlag(cu.m_tqBypass[0]);
++    interMode.contexts.codeSkipFlag(cu, 0);
++    int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
++    interMode.contexts.codeMergeIndex(cu, 0);
++    interMode.mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
+     interMode.coeffBits = 0;
+     interMode.totalBits = interMode.mvBits + skipFlagBits;
+     if (m_rdCost.m_psyRd)
+@@ -4624,7 +4686,7 @@
+ 
+     interMode.resEnergy = primitives.cu[part].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
+     updateModeCost(interMode);
+-    m_entropyCoder.store(interMode.contexts);
++    /* DM Phase 17: interMode.contexts already holds the post-coding state */
+ }
+ 
+ /* encode residual and calculate rate-distortion for a CU block.
+@@ -4682,15 +4744,22 @@
          sse_t cbf0Dist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
          if (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400)
          {
@@ -2916,17 +2954,74 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/enco
  
          uint32_t cbf0Energy; uint64_t cbf0Cost;
          if (m_rdCost.m_psyRd)
-@@ -4754,10 +4816,17 @@
+@@ -4716,12 +4785,16 @@
+     if (cu.getQtRootCbf(0))
+         saveResidualQTData(cu, *resiYuv, 0, 0);
  
-     m_entropyCoder.store(interMode.contexts);
+-    /* calculate signal bits for inter/merge/skip coded CU */
+-    m_entropyCoder.load(m_rqt[depth].cur);
+-
+-    m_entropyCoder.resetBits();
++    /* calculate signal bits for inter/merge/skip coded CU.
++     * DM Phase 17 (2026-07-31): coded directly into interMode.contexts
++     * (seeded from the rqt snapshot) instead of the old load -> code on
++     * m_entropyCoder -> store round-trip, saving one 166-byte context copy
++     * per inter candidate.  States and bit counts are identical;
++     * m_entropyCoder is left stale, and every later user loads first. */
++    interMode.contexts.load(m_rqt[depth].cur);
++    interMode.contexts.resetBits();
+     if (m_slice->m_pps->bTransquantBypassEnabled)
+-        m_entropyCoder.codeCUTransquantBypassFlag(tqBypass);
++        interMode.contexts.codeCUTransquantBypassFlag(tqBypass);
  
+     uint32_t coeffBits, bits, mvBits;
+     if (cu.m_mergeFlag[0] && cu.m_partSize[0] == SIZE_2Nx2N && !cu.getQtRootCbf(0))
+@@ -4730,34 +4803,39 @@
+ 
+         /* Merge/Skip */
+         coeffBits = mvBits = 0;
+-        m_entropyCoder.codeSkipFlag(cu, 0);
+-        int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
+-        m_entropyCoder.codeMergeIndex(cu, 0);
+-        mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
++        interMode.contexts.codeSkipFlag(cu, 0);
++        int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
++        interMode.contexts.codeMergeIndex(cu, 0);
++        mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
+         bits = mvBits + skipFlagBits;
+     }
+     else
+     {
+-        m_entropyCoder.codeSkipFlag(cu, 0);
+-        int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
+-        m_entropyCoder.codePredMode(cu.m_predMode[0]);
+-        m_entropyCoder.codePartSize(cu, 0, cuGeom.depth);
+-        m_entropyCoder.codePredInfo(cu, 0);
+-        mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
++        interMode.contexts.codeSkipFlag(cu, 0);
++        int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
++        interMode.contexts.codePredMode(cu.m_predMode[0]);
++        interMode.contexts.codePartSize(cu, 0, cuGeom.depth);
++        interMode.contexts.codePredInfo(cu, 0);
++        mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
+ 
+         bool bCodeDQP = m_slice->m_pps->bUseDQP;
+-        m_entropyCoder.codeCoeff(cu, 0, bCodeDQP, tuDepthRange);
+-        bits = m_entropyCoder.getNumberOfWrittenBits();
++        interMode.contexts.codeCoeff(cu, 0, bCodeDQP, tuDepthRange);
++        bits = interMode.contexts.getNumberOfWrittenBits();
+ 
+         coeffBits = bits - mvBits - skipFlagBits;
+     }
+ 
+-    m_entropyCoder.store(interMode.contexts);
 +    /* Phase 2 pointer-swap: on the cbf=0 branch reconYuv used to deep-copy
 +     * predYuv's content byte-for-byte. Instead move the buffer pointer with
 +     * adoptFrom(). predYuv is depopulated by the swap, so the resEnergy
 +     * calculation (SSE of fenc against pred) has to run first, while pred
 +     * still holds its motion-compensated content. */
 +    interMode.resEnergy = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
-+
+ 
      if (cu.getQtRootCbf(0))
          reconYuv->addClip(*predYuv, *resiYuv, log2CUSize, m_frame->m_fencPic->m_picCsp);
      else
@@ -2935,7 +3030,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/enco
  
      // update with clipped distortion and cost (qp estimation loop uses unclipped values)
      sse_t bestLumaDist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size);
-@@ -4774,7 +4843,6 @@
+@@ -4774,7 +4852,6 @@
      else if(m_rdCost.m_ssimRd)
          interMode.ssimEnergy = m_quant.ssimDistortion(cu, fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size, cu.m_log2CUSize[0], TEXT_LUMA, 0);
  
@@ -2943,7 +3038,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.cpp b/source/enco
      interMode.totalBits = bits;
      interMode.lumaDistortion = bestLumaDist;
      interMode.coeffBits = coeffBits;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.h b/source/encoder/search.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/encoder/search.h b/source/encoder/search.h
 --- a/source/encoder/search.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/encoder/search.h	2026-07-31 14:47:20.338263837 +0100
 @@ -288,6 +288,17 @@
@@ -2964,7 +3059,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/encoder/search.h b/source/encode
  #if ENABLE_SCC_EXT
      int             m_ibcEnabled;
      int             m_numBVs;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/input/input.h b/source/input/input.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/input/input.h b/source/input/input.h
 --- a/source/input/input.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/input.h	2026-07-29 16:32:49.820150021 +0100
 @@ -56,6 +56,19 @@
@@ -3010,7 +3105,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/input/input.h b/source/input/inp
      virtual bool isEof() const = 0;
  
      virtual bool isFail() = 0;
-diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.cpp b/source/input/yuv.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/input/yuv.cpp b/source/input/yuv.cpp
 --- a/source/input/yuv.cpp	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/yuv.cpp	2026-07-29 16:32:49.820150021 +0100
 @@ -35,6 +35,14 @@
@@ -3260,7 +3355,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.cpp b/source/input/yuv
          return true;
      }
      else
-diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.h b/source/input/yuv.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/input/yuv.h b/source/input/yuv.h
 --- a/source/input/yuv.h	2026-06-26 15:31:47.468698327 +0100
 +++ b/source/input/yuv.h	2026-07-29 16:32:49.820150021 +0100
 @@ -54,25 +54,46 @@
@@ -3312,7 +3407,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/input/yuv.h b/source/input/yuv.h
      const char *getName() const                   { return "yuv"; }
  
      int getWidth() const                          { return width; }
-diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.cpp b/source/test/pixelharness.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/test/pixelharness.cpp b/source/test/pixelharness.cpp
 --- a/source/test/pixelharness.cpp	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/test/pixelharness.cpp	2026-06-30 12:47:59.917468489 +0100
 @@ -2221,6 +2221,70 @@
@@ -3440,7 +3535,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.cpp b/source/t
      for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)
      {
          if (opt.integral_initv[k])
-diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.h b/source/test/pixelharness.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/test/pixelharness.h b/source/test/pixelharness.h
 --- a/source/test/pixelharness.h	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/test/pixelharness.h	2026-06-30 12:47:59.921468499 +0100
 @@ -134,6 +134,8 @@
@@ -3452,7 +3547,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/test/pixelharness.h b/source/tes
      bool check_integral_initv(integralv_t ref, integralv_t opt);
      bool check_integral_inith(integralh_t ref, integralh_t opt);
      bool check_ssimDist(ssimDistortion_t ref, ssimDistortion_t opt);
-diff -ruN -x build -x '*.o' -x '.git*' a/source/x265cli.cpp b/source/x265cli.cpp
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/x265cli.cpp b/source/x265cli.cpp
 --- a/source/x265cli.cpp	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/x265cli.cpp	2026-07-29 16:32:49.824150033 +0100
 @@ -1009,6 +1009,58 @@
@@ -3514,7 +3609,7 @@ diff -ruN -x build -x '*.o' -x '.git*' a/source/x265cli.cpp b/source/x265cli.cpp
          for (int view = 0; view < param->numViews - !!param->format; view++)
              this->input[view]->startReader();
  
-diff -ruN -x build -x '*.o' -x '.git*' a/source/x265cli.h b/source/x265cli.h
+diff -ruN -x build -x build-g -x '*.o' -x '.git*' a/source/x265cli.h b/source/x265cli.h
 --- a/source/x265cli.h	2026-06-26 15:31:47.472698338 +0100
 +++ b/source/x265cli.h	2026-07-29 16:32:49.824150033 +0100
 @@ -435,6 +435,11 @@

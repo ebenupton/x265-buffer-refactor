@@ -54,3 +54,5 @@ source/x265_config.h
 *.swo
 .DS_Store
 
+build-g/
+install-g/
