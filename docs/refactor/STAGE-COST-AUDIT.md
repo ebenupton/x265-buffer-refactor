@@ -134,9 +134,17 @@ splits than expected); BS self-time −41 %, `getPULeft/Above` and
 run-to-run variance); 4t neutral (deblock overlaps encode on the filter
 threads). Bit-exact at all three gate configs.
 
-The same layout argument is the template for the remaining candidates:
-AMVP/merge spatial-candidate collapse for uniform neighbour CTUs
-(~1–1.5 G, invasive — must reproduce exact candidate order),
-`fillReferenceSamples` all-available specialisation (~0.5 G), and
-flattening `compressInterCU_rd0_4`'s depth recursion for depth≤1
-(largest, most invasive).
+**Phase 15 (kept): interior-CTU reference-sample fill.** The same lens
+applied to `fillReferenceSamples`: for whole-CTU blocks the below-left is
+never available (next CTU row), so the existing all-available fast path
+never fired — every interior CTU paid the generic partial path's
+`adiLineBuffer` staging. The interior flag pattern (one missing run at
+the bottom of the left column, all else available) fills `dst` directly:
+one contiguous memcpy, one strided gather, one constant pad. Self-time
+1.47 % → 0.38 % (−1.8 G); whole-encode −0.7 % at 1t (4/4 clean pairs).
+Bit-exact.
+
+Remaining layout-specialisation candidates: AMVP/merge spatial-candidate
+collapse for uniform neighbour CTUs (~1–1.5 G, invasive — must reproduce
+exact candidate order), and flattening `compressInterCU_rd0_4`'s depth
+recursion for depth≤1 (largest, most invasive).
