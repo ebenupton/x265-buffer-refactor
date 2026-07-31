@@ -106,6 +106,22 @@ struct FrameStats
  * no active references. They hold the Slice instance and the 'official' CTU
  * data structures. They are maintained in a free-list pool along together with
  * a reconstructed image PicYuv in order to conserve memory. */
+/* DM Phase 16 (2026-07-31): compact per-TMVP-unit record of everything
+ * getCollocatedMV() reads from a collocated frame.  HEVC compresses the
+ * collocated MV field to a 16x16 grid (TMVP_UNIT_MASK), so per 16-part unit
+ * the lookup needs only the unit-base MV/refIdx/intra flag plus the per-part
+ * MODE_NONE bits.  Filled at CTU commit while the arrays are hot; read a
+ * frame later when the original per-part arrays are DRAM-cold. */
+struct TMVPRecord
+{
+    MV       mv[2];       /* unit-base L0/L1 MVs */
+    int8_t   refIdx[2];   /* unit-base L0/L1 ref indices */
+    uint8_t  intra;       /* isIntra at the unit base */
+    uint8_t  pad;
+    uint16_t noneMask;    /* MODE_NONE bit per part within the unit */
+    uint16_t pad2;
+};
+
 class FrameData
 {
 public:
@@ -122,6 +138,7 @@ public:
 
     CUDataMemPool  m_cuMemPool;
     CUData*        m_picCTU;
+    TMVPRecord*    m_tmvpRecords;  /* DM Phase 16: numCUsInFrame * (num4x4Partitions/16) */
 
     RPS*           m_spsrps;
     int            m_spsrpsIdx;

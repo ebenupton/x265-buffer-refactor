@@ -73,6 +73,8 @@ bool FrameData::create(const x265_param& param, const SPS& sps, int csp)
         return false;
     CHECKED_MALLOC_ZERO(m_cuStat, RCStatCU, sps.numCUsInFrame + 1);
     CHECKED_MALLOC(m_rowStat, RCStatRow, sps.numCuInHeight);
+    /* DM Phase 16: TMVP sidecar, written at commit, read by later frames */
+    CHECKED_MALLOC_ZERO(m_tmvpRecords, TMVPRecord, sps.numCUsInFrame * (param.num4x4Partitions >> 4));
     reinit(sps);
     
     for (int i = 0; i < INTEGRAL_PLANE_NUM; i++)
@@ -126,6 +128,7 @@ void FrameData::destroy()
     }
     X265_FREE(m_cuStat);
     X265_FREE(m_rowStat);
+    X265_FREE(m_tmvpRecords);
     for (int i = 0; i < INTEGRAL_PLANE_NUM; i++)
     {
         if (m_meBuffer[i] != NULL)

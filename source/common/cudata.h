@@ -261,6 +261,7 @@ public:
     void     copyPartFrom(const CUData& cu, const CUGeom& childGeom, uint32_t subPartIdx);
     void     setEmptyPart(const CUGeom& childGeom, uint32_t subPartIdx);
     void     copyToPic(uint32_t depth) const;
+    void     fillTMVPRecords() const;  /* DM Phase 16: refresh this commit region's TMVP sidecar */
 
     /* RD-0 methods called only from encodeResidue */
     void     copyFromPic(const CUData& ctu, const CUGeom& cuGeom, int csp, bool copyQp = true);
