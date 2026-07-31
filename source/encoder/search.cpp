@@ -1743,7 +1743,11 @@ void Search::checkIntraInInter(Mode& intraMode, const CUGeom& cuGeom)
     COPY4_IF_LT(bcost, cost, bmode, mode, bsad, sad, bbits, bits);
 
     bool allangs = true;
-    if (primitives.cu[sizeIdx].intra_pred_allangs)
+    /* Search-budget: fast-intra tries ~13 of 33 angular modes, so batch-
+     * generating all 33 (plus the fenc transpose) wastes most of the allangs
+     * work.  Generate per-mode instead; sa8d is transpose-invariant, so the
+     * costs (and every decision downstream) are identical. */
+    if (primitives.cu[sizeIdx].intra_pred_allangs && !m_param->bEnableFastIntra)
     {
         primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleStride);
         primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16)); 

@@ -4161,6 +4161,14 @@ void Analysis::addSplitFlagCost(Mode& mode, uint32_t depth)
 
 uint32_t Analysis::topSkipMinDepth(const CUData& parentCTU, const CUGeom& cuGeom)
 {
+    /* Search-budget: at 16x16 CTUs this heuristic can only ever skip the
+     * depth-0 evaluation, and reading the co-located ref CTU's m_cuDepth is
+     * a chain of dependent cache misses paid for every CU (~3% of encode
+     * cycles at ultrafast).  Always searching from depth 0 costs nothing on
+     * typical content and can only improve RD. */
+    if (m_param->maxCUSize == 16)
+        return 0;
+
     /* Do not attempt to code a block larger than the largest block in the
      * co-located CTUs in L0 and L1 */
     int currentQP = parentCTU.m_qp[0];
