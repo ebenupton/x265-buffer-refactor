@@ -157,7 +157,21 @@ noneMask bit loop. `getCollocatedMV` 1.25 % → 0.31 %,
 −0.3…−0.4 % at 1t. A cache pays when compression is high and the
 replaced reads are truly cold; the BS cache had neither.
 
-Remaining layout-specialisation candidates: AMVP/merge spatial-candidate
-collapse for uniform neighbour CTUs (~1–1.5 G, invasive — must reproduce
-exact candidate order), and flattening `compressInterCU_rd0_4`'s depth
-recursion for depth≤1 (largest, most invasive).
+**Tried and rejected: `getCtxSkipFlag` memo**
+(`phase17-skipctx-memo-rejected.patch`). A per-CUData cache of the
+skip-flag context barely hit (0.69 % → 0.65 %): the several calls per CU
+land on *different* Mode objects (skip.cu / merge.cu / intra.cu), each
+asking once or twice, so a per-object memo has nothing to reuse. Sharing
+across objects needs per-thread keying machinery out of proportion to
+the ~0.5 G ceiling. Rejected.
+
+Remaining candidates, none cheap: entropy skip-path context derivation
+(~0.35 %, delicate choreography in encodeResAndCalcRd*), AMVP/merge
+spatial-candidate collapse for uniform neighbour CTUs (~1–1.5 G,
+invasive — must reproduce exact candidate order), and flattening
+`compressInterCU_rd0_4`'s depth recursion for depth≤1 (largest, most
+invasive). The safe, high-yield layout cuts are exhausted: of the last
+five experiments two were kept (Phases 15, 16) and three rejected as
+washes — the curve has reached its knee, and what remains is either
+structural (CABAC RDO, quad-tree metadata generality) or priced search
+work.
