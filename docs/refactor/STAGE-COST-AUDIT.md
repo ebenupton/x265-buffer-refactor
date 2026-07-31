@@ -117,6 +117,26 @@ left neighbour was deblocked moments earlier and the above row is only
 BS *derivation rules themselves* (per-edge neighbour resolution over
 quad-tree z-order metadata), and any cache merely relocates the traffic
 it adds. x264's equivalent is cheap because H.264's BS rules index a
-fixed per-MB cache directly. Verdict: irreducible without changing the
-committed metadata layout itself (z-order → raster), which is a
-tree-wide refactor out of scope. Both patches preserved, rejected.
+fixed per-MB cache directly. Both cache patches preserved, rejected.
+
+**What finally worked — layout specialisation (Phase 14, kept).** The
+fast config restricts CTU layouts to essentially two shapes: a single
+2Nx2N 16x16 CU with one TU, or a force-split set of 8x8s. When both
+sides of a CTU edge are the single-PU shape, every part on the edge sees
+identical BS inputs, so `deblockCU` derives BS **once per CTU edge and
+splats it**, skipping `setEdgefilterPU/TU`, the raster↔z `calcBsIdx`
+lookups and the 16-part scan entirely; any other layout falls back to
+the generic path. This cuts the *count* of derivations — the thing the
+caches couldn't touch. Uniform-pair hit rate ~40 % on bbb (more 8x8
+splits than expected); BS self-time −41 %, `getPULeft/Above` and
+`setEdgefilterTU` down proportionally. Interleaved A/B, 6 pairs at 1t:
+**−1.36 % whole-encode** (6/6 pairs favourable, and noticeably tighter
+run-to-run variance); 4t neutral (deblock overlaps encode on the filter
+threads). Bit-exact at all three gate configs.
+
+The same layout argument is the template for the remaining candidates:
+AMVP/merge spatial-candidate collapse for uniform neighbour CTUs
+(~1–1.5 G, invasive — must reproduce exact candidate order),
+`fillReferenceSamples` all-available specialisation (~0.5 G), and
+flattening `compressInterCU_rd0_4`'s depth recursion for depth≤1
+(largest, most invasive).
