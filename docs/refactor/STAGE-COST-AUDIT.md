@@ -184,6 +184,36 @@ side-effects) and was reverted; lesson: annotate-level attribution near
 call returns needs skid correction before acting. (2) The
 `getCtxSkipFlag` memo (above).
 
+## Overnight follow-ups (2026-08-01)
+
+**AMVP fixed-position fast path — rejected**
+(`phase18-amvp-fixedpos-rejected.patch`). For a whole-CTU PU the five
+spatial AMVP positions are fixed (LEFT/ABOVE/ABOVE-LEFT = neighbour CTU
+bottom-right part, ABOVE-RIGHT = bottom-left, BELOW-LEFT never
+available), so the z-scan derivations were replaced with direct reads.
+Bit-exact, and the cost *relocated exactly* (`getInterNeighbourMV`
+0.67 % → `getNeighbourMV` 0.68 %): the derivation arithmetic is ~free;
+the cost is L2-latency loads of the neighbour CTUs' per-part arrays,
+which the fast path performs identically. AMVP/merge construction is now
+attributed alongside deblock BS: intrinsic neighbour-metadata access
+latency, irreducible without raster-order committed metadata.
+
+**First 4t profile — sync justified, C2C quantified.** The 4t-specific
+costs are ~3 % (6.8 G) of mutex/CAS/SWP from WPP row scheduling, and a
+~2–3× absolute inflation of deblock costs (the frame-filter core's
+private L2 never holds the committing core's metadata; every read is a
+cache-to-cache transfer). Measured `--no-wpp` at 4t: −4 % cycles but
+**36.1 → 31.5 fps** — WPP's parallelism buys far more than its sync
+costs. Justified; WPP stays.
+
+**BS record cache, third and final rejection**
+(`phase18b-bs-cache-4t-rejected.patch`). Re-tried at 4t on the C2C
+hypothesis: consistently **worse** (+1.6 % at 4t, +1.5 % at 1t, 6/6
+pairs) — the commit-time record fills (two per CTU at rd≤1, since
+`encodeResidue` rewrites cbf) inject their own cross-core invalidations
+into the hottest loop, outweighing the read-side line compression. Dead
+in all three forms; do not revisit without a metadata-layout change.
+
 **Closing state of the sweep (Phases 13–17).** Cumulative ≈ −5.5 % at
 1t, every cut bit-exact at the three gate configs. Of eleven
 experiments, six kept and five rejected with post-mortems. The remaining
