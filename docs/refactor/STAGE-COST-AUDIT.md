@@ -94,13 +94,29 @@ x265 deleted the warming copy, so the first consumer takes the cold
 misses. Combined ingest+lowres: x264 9.6 G, x265 ~7 G — the "delta" is
 banked profit surfacing in a different ledger row. No action.
 
-**`getBoundaryStrength` (3.0 G incl. `getPULeft/Above`) — bounded by
-metadata latency, not logic.** Hoisting the uniform Q side (intra flag,
-cbf, L0 ref, MV — constant across the 4 edge parts of a 2Nx2N/TU16 CU)
-into `deblockCU` and running a lean P-side-only helper moved exactly its
-savings into the caller: BS 1.65 % → 1.41 %, `deblockCU` 0.62 % → 0.86 %,
-net zero. The cost is cold loads of the *left/above CTU's* per-part arrays
-plus z-order neighbour derivation, which the hoist cannot avoid. A real
-cut needs a data-layout change (raster-order BS metadata, or a per-CTU
-edge cache built during commit while the arrays are hot) — deferred, est.
-~1 G for substantially more surgery.
+**`getBoundaryStrength` (3.0 G incl. `getPULeft/Above`) — intrinsic
+derivation logic, not cache misses.** Three escalating experiments, all
+bit-exact (gate PASS), all net-neutral:
+
+1. *Q-side hoist* (uniform intra/cbf/ref/MV computed once per 2Nx2N CU):
+   moved exactly its savings into `deblockCU`. Net zero.
+2. *Per-CTU edge cache* (`phase14b-bs-edge-cache-rejected.patch`): 8-byte
+   raster-order BSRecords filled at `copyToPic`/`updatePic` (and at
+   `updatePic` specifically, because rd≤1 `encodeResidue` rewrites
+   predMode/tuDepth/cbf after `copyToPic`), consumed by the deblocker as
+   two adjacent loads. Deblock-side cost fell 3.12 % → 2.28 % (−1.5 G) —
+   the mechanism works — but the fill cost +1.1 G. Net ≈ −0.3 G, inside
+   noise.
+3. *Broadcast fill* (one record splatted when single-PU/single-TU): fill
+   stayed at ~1.1 G — the cost is cold-RFO stores into the 1 MB/frame
+   record array, not the loop.
+
+The premise was wrong: by the time the frame filter reaches a CTU, the
+left neighbour was deblocked moments earlier and the above row is only
+~120 KB back — the metadata is already L2-resident. The ~3 G is the HEVC
+BS *derivation rules themselves* (per-edge neighbour resolution over
+quad-tree z-order metadata), and any cache merely relocates the traffic
+it adds. x264's equivalent is cheap because H.264's BS rules index a
+fixed per-MB cache directly. Verdict: irreducible without changing the
+committed metadata layout itself (z-order → raster), which is a
+tree-wide refactor out of scope. Both patches preserved, rejected.
