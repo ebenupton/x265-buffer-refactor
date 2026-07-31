@@ -76,6 +76,18 @@ this tree:
 | upstream 4.1, base config | 250.8 G | 30.5 | 42.71 dB |
 | this tree + recommended config | 226.4 G | 33.7 | **43.58 dB** |
 
+The quality gain can instead be banked as bitrate: a rate sweep on the
+recommended config (4.0/4.2/4.4/4.6/5.0 Mbps, ~0.08 dB per 100 kbps) shows
+this tree matches upstream 4.1's 5 Mbps quality (42.714 dB) at **~3.9 Mbps —
+a ~22 % bitrate saving at equal PSNR**, and in fewer cycles than any 5 Mbps
+configuration measured.
+
+A follow-up audit of the lookahead (~14.5 % inclusive under zerolatency)
+found it fairly priced too: skipping lowres intra estimation on non-keyframes
+saves 5.8 % of cycles but drifts ABR (−86 kbps undershoot) and costs
+~0.16 dB rate-corrected — the same marginal ROI as deblock, which stays. No
+further cuts taken.
+
 ### Data-movement parity with x264
 
 The end goal of the later phases: every cycle x265 spends over x264 should be
