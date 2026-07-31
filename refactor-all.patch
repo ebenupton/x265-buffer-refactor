@@ -1,5 +1,148 @@
---- a/source/common/aarch64/asm-primitives.cpp
-+++ b/source/common/aarch64/asm-primitives.cpp
+--- a/source/abrEncApp.cpp	2026-06-26 15:31:47.448698270 +0100
++++ b/source/abrEncApp.cpp	2026-07-29 16:32:49.820150021 +0100
+@@ -177,7 +177,10 @@
+             {
+                 for (uint32_t index = 0; index < m_queueSize; index++)
+                 {
+-                    X265_FREE(m_inputPicBuffer[pass][index]->planes[0]);
++                    /* in zero-copy mode planes[0] aliases the input reader's
++                     * ring buffer, which the reader owns and frees */
++                    if (!m_passEnc[pass]->m_inputZeroCopy)
++                        X265_FREE(m_inputPicBuffer[pass][index]->planes[0]);
+                     x265_picture_free(m_inputPicBuffer[pass][index]);
+                     x265_free_analysis_data(&m_param[pass], &m_analysisBuffer[pass][index]);
+                 }
+@@ -223,6 +226,8 @@
+         }
+         m_param = cliopt.param;
+         m_inputOver = false;
++        m_inputZeroCopy = false;
++        m_inputDirect = false;
+         m_lastIdx = -1;
+         m_encoder = NULL;
+         m_scaler = NULL;
+@@ -236,7 +241,21 @@
+             setReuseLevel();
+                 
+         if (!(m_cliopt.enableScaler && m_id))
++        {
+             m_reader = new Reader(m_id, this);
++            /* single encode, single view/layer, no field splitting, no scaler:
++             * the input picture is fully consumed (copied) inside each
++             * encoder_encode() call, so the reader's ring slot can be handed
++             * to the encoder by pointer and released after the encode call
++             * instead of being memcpy'd into the inter-thread picture queue */
++            m_inputZeroCopy = m_parent->m_numEncodes == 1 && m_param->numViews == 1 &&
++                !m_param->format && m_param->numScalableLayers <= 1 &&
++                !m_param->bField && !m_cliopt.enableScaler &&
++                m_input[0]->enableZeroCopy();
++            /* direct ingest was decided (and the ring re-laid) during option
++             * parsing; its eligibility is a strict subset of zero-copy's */
++            m_inputDirect = m_cliopt.inputDirect && m_inputZeroCopy;
++        }
+         else
+         {
+             VideoDesc *src = NULL, *dst = NULL;
+@@ -282,6 +301,23 @@
+         /* get the encoder parameters post-initialization */
+         m_cliopt.api->encoder_parameters(m_encoder, m_param);
+ 
++        if (m_inputDirect)
++        {
++            /* the ring geometry was derived from pre-open params; if the
++             * encoder adjusted anything it depends on, the aliased slots
++             * would no longer match the fenc layout — abort rather than
++             * silently corrupt the encode */
++            uint32_t maxCU = m_param->maxCUSize;
++            uint32_t stride = ((m_param->sourceWidth + maxCU - 1) / maxCU) * maxCU + ((maxCU + 32) << 1);
++            if (stride != m_cliopt.directGeo.stride[0] ||
++                (uint32_t)(m_param->frameNumThreads + m_param->lookaheadDepth + 3) > m_cliopt.directGeo.slots)
++            {
++                x265_log(NULL, X265_LOG_ERROR, "direct-ingest geometry invalidated by encoder_open()\n");
++                m_ret = 2;
++                return -1;
++            }
++        }
++
+         return 1;
+     }
+ 
+@@ -807,6 +843,8 @@
+                     int idx = (inFrameCount - 1) % m_parent->m_queueSize;
+                     m_parent->m_picIdxReadCnt[m_id][idx].incr();
+                     m_parent->m_picReadCnt[m_id].incr();
++                    if (!m_inputDirect && m_inputZeroCopy && picInput)
++                        m_input[0]->releaseFrame();
+                     if (m_cliopt.loadLevel && picInput)
+                     {
+                         m_parent->m_analysisReadCnt[m_cliopt.refId].incr();
+@@ -820,6 +858,14 @@
+                         break;
+                     }
+ 
++                    /* in direct-ingest mode the encoder aliases the ring slot as
++                     * the frame's fenc pic, so it stays pinned until the frame
++                     * is fully encoded: release one slot per output (in-order,
++                     * valid because bframes=0 keeps encode order == input order) */
++                    if (m_inputDirect)
++                        for (int enc = 0; enc < numEncoded; enc++)
++                            m_input[0]->releaseFrame();
++
+                     if (reconPlay && numEncoded)
+                         reconPlay->writePicture(*pic_recon);
+ 
+@@ -859,6 +905,10 @@
+                     break;
+                 }
+ 
++                if (m_inputDirect)
++                    for (int enc = 0; enc < numEncoded; enc++)
++                        m_input[0]->releaseFrame();
++
+                 if (reconPlay && numEncoded)
+                     reconPlay->writePicture(*pic_recon);
+ 
+@@ -1189,6 +1239,17 @@
+                     dest->stride[2] = src->stride[2];
+                     dest->format = src->format;
+ 
++                    if (m_parentEnc->m_inputZeroCopy)
++                    {
++                        /* hand the input reader's ring slot to the encoder by
++                         * pointer; PassEncoder::threadMain releases it after
++                         * encoder_encode() has consumed the picture */
++                        dest->planes[0] = src->planes[0];
++                        dest->planes[1] = src->planes[1];
++                        dest->planes[2] = src->planes[2];
++                    }
++                    else
++                    {
+                     if (!dest->planes[0])
+                         dest->planes[0] = X265_MALLOC(char, dest->framesize);
+ 
+@@ -1196,6 +1257,7 @@
+                     int height = (src->height * (src->format == 2 ? 2 : 1));
+                     dest->planes[1] = (char*)dest->planes[0] + src->stride[0] * height;
+                     dest->planes[2] = (char*)dest->planes[1] + src->stride[1] * (height >> x265_cli_csps[src->colorSpace].height[1]);
++                    }
+ #if ENABLE_ALPHA
+                     if (m_parentEnc->m_param->numScalableLayers > 1)
+                     {
+--- a/source/abrEncApp.h	2026-06-26 15:31:47.448698270 +0100
++++ b/source/abrEncApp.h	2026-07-29 16:32:49.820150021 +0100
+@@ -78,6 +78,10 @@
+         Reader *m_reader;
+         Scaler *m_scaler;
+         bool m_inputOver;
++        bool m_inputZeroCopy;
++        /* direct ingest: input ring slots are in fenc geometry and aliased by
++         * the encoder (bCopyPicToFrame=0); release one slot per encoded output */
++        bool m_inputDirect;
+ 
+         int m_threadActive;
+         int m_lastIdx;
+--- a/source/common/aarch64/asm-primitives.cpp	2026-06-26 15:31:47.448698270 +0100
++++ b/source/common/aarch64/asm-primitives.cpp	2026-07-01 13:58:44.061715257 +0100
 @@ -582,7 +582,8 @@
      p.cu[BLOCK_32x32].var = PFX(pixel_var_32x32_neon);
      p.cu[BLOCK_64x64].var = PFX(pixel_var_64x64_neon);
@@ -19,8 +162,475 @@
      p.cu[BLOCK_16x16].calcresidual[NONALIGNED] = PFX(getResidual16_sve2);
      p.cu[BLOCK_32x32].calcresidual[NONALIGNED] = PFX(getResidual32_sve2);
  
---- a/source/common/aarch64/fun-decls.h
-+++ b/source/common/aarch64/fun-decls.h
+@@ -1038,6 +1039,7 @@
+         setupFilterPrimitives_neon(p);
+         setupDCTPrimitives_neon(p);
+         setupLoopFilterPrimitives_neon(p);
++        setupDeblockPrimitives_neon(p);
+         setupIntraPrimitives_neon(p);
+         setupSaoPrimitives_neon(p);
+     }
+--- a/source/common/aarch64/deblock-prim.cpp	1970-01-01 01:00:00.000000000 +0100
++++ b/source/common/aarch64/deblock-prim.cpp	2026-06-30 12:47:59.825468245 +0100
+@@ -0,0 +1,456 @@
++/*****************************************************************************
++ * deblock-prim.cpp: aarch64 NEON deblock loop-filter primitives for x265 4.1
++ * (added 2026-06-26)
++ *
++ * Two parts:
++ *   1. pelFilterLumaStrong_V/_H_neon —
++ *      ported directly from upstream master (post-4.1) commits
++ *        baf2df0 (V, 2.70x on Neoverse N1)
++ *        155064d (H, 3.67x on Neoverse N1)
++ *      Author: Micro Daryl Robles <microdaryl.robles@arm.com>, MulticoreWare/Arm.
++ *      Backported here as 4.1 does not include them.
++ *
++ *   2. pelFilterLumaWeak_V/_H_neon —
++ *      new in this patch. Upstream as of 2025-Q2 only has the strong filter
++ *      in NEON; the weak filter remains a scalar C inline in deblock.cpp.
++ *      We promote it to a primitive (pelFilterLumaWeak[2] in primitives.h)
++ *      and add a NEON impl that vectorises across the 4-row UNIT and lane-
++ *      masks the per-row "|delta| < thrCut" branch.
++ *
++ * Chroma deblock is left scalar — upstream's NEON port did not include it
++ * because the 4-row × 4-col working set is too small to amortise the 4x4
++ * transpose overhead (measured 0.84x vs C at -O3). Upstream instead
++ * unrolled the C reference (~8% gain); we mirror that in loopfilter.cpp.
++ *****************************************************************************/
++
++#include "common.h"
++#include "loopfilter-prim.h"
++#include "mem-neon.h"
++
++#define PIXEL_MIN 0
++
++#if !(HIGH_BIT_DEPTH) && defined(HAVE_NEON)
++
++#include <arm_neon.h>
++
++using namespace X265_NS;
++
++namespace
++{
++
++
++/* ============================================================
++ * pelFilterLumaStrong  —  ported from upstream master
++ * ============================================================ */
++
++static void pelFilterLumaStrong_V_neon(pixel *src, intptr_t srcStep, intptr_t offset,
++                                       int32_t tcP, int32_t tcQ)
++{
++    X265_CHECK(offset == 1, "Offset value must be 1 for LumaStrong Vertical\n");
++
++    src -= offset * 4;
++
++    const int16x8_t tc_vec = vcombine_s16(vdup_n_s16((int16_t)tcP), vdup_n_s16((int16_t)tcQ));
++    const int16x8_t neg_tc_vec = vnegq_s16(tc_vec);
++
++    static const uint8_t filter[3][8] =
++    {
++        { 0, 2, 1, 2, 2, 1, 1, 0 },
++        { 0, 3, 1, 2, 2, 1, 3, 0 },
++        { 0, 1, 1, 2, 2, 1, 2, 0 },
++    };
++
++    const uint8x8_t f0 = vld1_u8(filter[0]);
++    const uint8x8_t f1 = vld1_u8(filter[1]);
++    const uint8x8_t f2 = vld1_u8(filter[2]);
++
++    /* 255 (out-of-range) → 0 from vtbl1_u8 — used to zero the unused lanes. */
++    const uint8x8_t idx0 = { 255, 0,   1, 2, 3,   4, 5, 255 };
++    const uint8x8_t idx1 = { 255, 1,   2, 3, 4,   5, 6, 255 };
++    const uint8x8_t idx2 = { 255, 2,   3, 4, 5,   6, 7, 255 };
++    const uint8x8_t idx3 = { 255, 3,   4, 5, 6, 255, 3, 255 };
++    const uint8x8_t idx4 = { 255, 4, 255, 1, 2,   3, 4, 255 };
++
++    const int16x8_t neg_shift = { 0, -3, -2, -3, -3, -2, -3, 0 };
++
++    for (int i = 0; i < UNIT_SIZE; i++, src += srcStep)
++    {
++        uint8x8_t s = vld1_u8(src);
++        uint8x8_t s0 = vtbl1_u8(s, idx0);
++        uint8x8_t s1 = vtbl1_u8(s, idx1);
++        uint8x8_t s2 = vtbl1_u8(s, idx2);
++        uint8x8_t s3 = vtbl1_u8(s, idx3);
++        uint8x8_t s4 = vtbl1_u8(s, idx4);
++
++        uint16x8_t s34 = vaddl_u8(s3, s4);
++        uint16x8_t sum = vmlal_u8(s34, s0, f0);
++        sum = vmlal_u8(sum, s1, f1);
++        sum = vmlal_u8(sum, s2, f2);
++
++        sum = vrshlq_u16(sum, neg_shift);
++        sum = vsubw_u8(sum, s1);
++        sum = vreinterpretq_u16_s16(
++            vminq_s16(tc_vec, vmaxq_s16(neg_tc_vec, vreinterpretq_s16_u16(sum))));
++
++        uint8x8_t d = vmovn_u16(sum);
++        d = vadd_u8(d, s);
++        vst1_u8(src, d);
++    }
++}
++
++static void pelFilterLumaStrong_H_neon(pixel *src, intptr_t srcStep, intptr_t offset,
++                                       int32_t tcP, int32_t tcQ)
++{
++    X265_CHECK(UNIT_SIZE == 4 && srcStep == 1,
++               "UNIT_SIZE must be 4 and srcStep must be 1 for LumaStrong Horizontal\n");
++
++    (void)srcStep;
++
++    const int16x8_t tc_vec = vcombine_s16(vdup_n_s16((int16_t)tcP), vdup_n_s16((int16_t)tcQ));
++    const int16x8_t neg_tc_vec = vnegq_s16(tc_vec);
++
++    uint8x8_t m0 = vld1_u8(src - 4 * offset);
++    uint8x8_t m1 = vld1_u8(src - 3 * offset);
++    uint8x8_t m2 = vld1_u8(src - 2 * offset);
++    uint8x8_t m3 = vld1_u8(src - 1 * offset);
++    uint8x8_t m4 = vld1_u8(src - 0 * offset);
++    uint8x8_t m5 = vld1_u8(src + 1 * offset);
++    uint8x8_t m6 = vld1_u8(src + 2 * offset);
++    uint8x8_t m7 = vld1_u8(src + 3 * offset);
++
++    uint8x8_t m12 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m1), vreinterpret_u32_u8(m2)));
++    uint8x8_t m23 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m2), vreinterpret_u32_u8(m3)));
++    uint8x8_t m34 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m3), vreinterpret_u32_u8(m4)));
++    uint8x8_t m45 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m4), vreinterpret_u32_u8(m5)));
++    uint8x8_t m56 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m5), vreinterpret_u32_u8(m6)));
++
++    /* src[-1 * offset], src[0 * offset] — 2 cols per 8-lane vector. */
++    uint16x8_t p0 = vaddl_u8(m23, m34);
++    p0 = vaddw_u8(p0, m45);
++    uint16x8_t t0 = vshlq_n_u16(p0, 1);
++    uint16x8_t t1 = vaddl_u8(m12, m56);
++    uint16x8_t t01 = vaddq_u16(t0, t1);
++    t01 = vrshrq_n_u16(t01, 3);
++    t01 = vsubw_u8(t01, m34);
++    t01 = vreinterpretq_u16_s16(
++        vminq_s16(tc_vec, vmaxq_s16(neg_tc_vec, vreinterpretq_s16_u16(t01))));
++    uint8x8_t d01 = vmovn_u16(t01);
++    d01 = vadd_u8(d01, m34);
++    store_u8x4_strided_xN<2>(&src[-1 * offset], 1 * offset, &d01);
++
++    uint8x8_t m16 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m1), vreinterpret_u32_u8(m6)));
++    uint8x8_t m25 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m2), vreinterpret_u32_u8(m5)));
++
++    /* src[-2 * offset], src[1 * offset] */
++    uint16x8_t p1 = vaddw_u8(p0, m16);
++    uint16x8_t t23 = vrshrq_n_u16(p1, 2);
++    t23 = vsubw_u8(t23, m25);
++    t23 = vreinterpretq_u16_s16(
++        vminq_s16(tc_vec, vmaxq_s16(neg_tc_vec, vreinterpretq_s16_u16(t23))));
++    uint8x8_t d23 = vmovn_u16(t23);
++    d23 = vadd_u8(d23, m25);
++    store_u8x4_strided_xN<2>(&src[-2 * offset], 3 * offset, &d23);
++
++    uint8x8_t m07 =
++        vreinterpret_u8_u32(vzip1_u32(vreinterpret_u32_u8(m0), vreinterpret_u32_u8(m7)));
++
++    /* src[-3 * offset], src[2 * offset] */
++    uint16x8_t p2 = vaddl_u8(m07, m16);
++    uint16x8_t t45 = vmlaq_n_u16(p1, p2, 2);
++    t45 = vrshrq_n_u16(t45, 3);
++    t45 = vsubw_u8(t45, m16);
++    t45 = vreinterpretq_u16_s16(
++        vminq_s16(tc_vec, vmaxq_s16(neg_tc_vec, vreinterpretq_s16_u16(t45))));
++    uint8x8_t d45 = vmovn_u16(t45);
++    d45 = vadd_u8(d45, m16);
++    store_u8x4_strided_xN<2>(&src[-3 * offset], 5 * offset, &d45);
++}
++
++
++/* ============================================================
++ * pelFilterLumaWeak  —  new in this patch
++ * ============================================================
++ *
++ * C reference (now in common/loopfilter.cpp::pelFilterLumaWeak_c):
++ *   thrCut = tc * 10; tc2 = tc >> 1; maskP1 &= maskP; maskQ1 &= maskQ;
++ *   for each row in [0, UNIT_SIZE=4):
++ *     m2..m5 at src[-2*off..+off]
++ *     delta = (9*(m4-m3) - 3*(m5-m2) + 8) >> 4
++ *     if (|delta| < thrCut):
++ *       delta_c = clip3(-tc, +tc, delta)
++ *       src[-off] = clip(m3 + (delta_c & maskP))
++ *       src[ 0 ]  = clip(m4 - (delta_c & maskQ))
++ *       if maskP1: src[-2*off] = clip(m2 + clip3(-tc2,tc2, (((m1+m3+1)>>1) - m2 + delta_c)>>1))
++ *       if maskQ1: src[ off ]  = clip(m5 + clip3(-tc2,tc2, (((m6+m4+1)>>1) - m5 - delta_c)>>1))
++ *
++ * The per-row branch (|delta| < thrCut) is the only data-dependent control;
++ * maskP1/Q1 are scalar-per-call. We use 4-lane vectors (one lane per row),
++ * compute delta vector, compute lane_mask = (|delta| < thrCut), then blend
++ * new vs original via vbsl_u8 before storing.
++ */
++
++/* clip3(-bound, +bound, v); bound passed as a positive int16. */
++static inline int16x4_t sym_clip_s16(int16x4_t v, int16_t bound)
++{
++    const int16x4_t lo = vdup_n_s16((int16_t)-bound);
++    const int16x4_t hi = vdup_n_s16(bound);
++    return vmax_s16(lo, vmin_s16(hi, v));
++}
++
++/* Pack 4-lane int16 to low-4 lanes of u8x8 (saturating to [0,255]). */
++static inline uint8x8_t pack_s16_to_u8(int16x4_t v)
++{
++    return vqmovun_s16(vcombine_s16(v, v));
++}
++
++/* Load 4 bytes from ptr to low-4 lanes of int16x4. Reads 8 bytes via vld1_u8;
++ * deblock's source buffer always has enough stride padding for that to be safe. */
++static inline int16x4_t load4_s16(const uint8_t *ptr)
++{
++    uint8x8_t b = vld1_u8(ptr);
++    return vreinterpret_s16_u16(vget_low_u16(vmovl_u8(b)));
++}
++
++/* Transpose 4 rows × 8 cols (uint8) → 8 int16x4_t vectors, m[c]={r0c,r1c,r2c,r3c}. */
++static inline void transpose_4x8_to_8x4(const uint8_t *src, intptr_t srcStep,
++                                        int16x4_t m[8])
++{
++    uint8x8_t r0 = vld1_u8(src + 0 * srcStep);
++    uint8x8_t r1 = vld1_u8(src + 1 * srcStep);
++    uint8x8_t r2 = vld1_u8(src + 2 * srcStep);
++    uint8x8_t r3 = vld1_u8(src + 3 * srcStep);
++
++    uint8x8x2_t a = vtrn_u8(r0, r1);
++    uint8x8x2_t b = vtrn_u8(r2, r3);
++
++    uint16x4x2_t c = vtrn_u16(vreinterpret_u16_u8(a.val[0]),
++                              vreinterpret_u16_u8(b.val[0]));
++    uint16x4x2_t d = vtrn_u16(vreinterpret_u16_u8(a.val[1]),
++                              vreinterpret_u16_u8(b.val[1]));
++
++    uint16x8_t c0w = vmovl_u8(vreinterpret_u8_u16(c.val[0]));
++    uint16x8_t c1w = vmovl_u8(vreinterpret_u8_u16(c.val[1]));
++    uint16x8_t d0w = vmovl_u8(vreinterpret_u8_u16(d.val[0]));
++    uint16x8_t d1w = vmovl_u8(vreinterpret_u8_u16(d.val[1]));
++
++    m[0] = vreinterpret_s16_u16(vget_low_u16(c0w));
++    m[4] = vreinterpret_s16_u16(vget_high_u16(c0w));
++    m[2] = vreinterpret_s16_u16(vget_low_u16(c1w));
++    m[6] = vreinterpret_s16_u16(vget_high_u16(c1w));
++    m[1] = vreinterpret_s16_u16(vget_low_u16(d0w));
++    m[5] = vreinterpret_s16_u16(vget_high_u16(d0w));
++    m[3] = vreinterpret_s16_u16(vget_low_u16(d1w));
++    m[7] = vreinterpret_s16_u16(vget_high_u16(d1w));
++}
++
++static inline void weak_filter_4(const int16x4_t m1, const int16x4_t m2,
++                                 const int16x4_t m3, const int16x4_t m4,
++                                 const int16x4_t m5, const int16x4_t m6,
++                                 int16_t tc, int16_t tc2, int32_t thrCut,
++                                 int32_t maskP, int32_t maskQ,
++                                 int32_t maskP1, int32_t maskQ1,
++                                 int16x4_t &n_m2, int16x4_t &n_m3,
++                                 int16x4_t &n_m4, int16x4_t &n_m5,
++                                 uint16x4_t &lane_mask)
++{
++    /* delta = (9*(m4-m3) - 3*(m5-m2) + 8) >> 4
++     * sum fits in int16: max |sum| ~ 12*255 + 8 = 3068 */
++    int16x4_t d43 = vsub_s16(m4, m3);
++    int16x4_t d52 = vsub_s16(m5, m2);
++    int16x4_t s   = vshl_n_s16(d43, 3);                    /* 8*(m4-m3) */
++    s = vadd_s16(s, d43);                                  /* +(m4-m3) = 9* */
++    s = vsub_s16(s, vadd_s16(d52, vadd_s16(d52, d52)));    /* − 3*(m5-m2) */
++    int16x4_t delta = vrshr_n_s16(s, 4);                   /* (s + 8) >> 4 */
++
++    /* per-lane mask: 0xFFFF where |delta| < thrCut, else 0 */
++    int16x4_t abs_delta = vabs_s16(delta);
++    lane_mask = vclt_s16(abs_delta, vdup_n_s16((int16_t)thrCut));
++
++    int16x4_t delta_c = sym_clip_s16(delta, tc);
++
++    int16x4_t dP = vand_s16(delta_c, vdup_n_s16((int16_t)maskP));
++    int16x4_t dQ = vand_s16(delta_c, vdup_n_s16((int16_t)maskQ));
++    n_m3 = vadd_s16(m3, dP);
++    n_m4 = vsub_s16(m4, dQ);
++
++    if (maskP1)
++    {
++        int16x4_t avg13  = vrhadd_s16(m1, m3);                 /* (m1+m3+1)>>1 */
++        int16x4_t d1_pre = vadd_s16(vsub_s16(avg13, m2), delta_c);
++        int16x4_t d1     = vshr_n_s16(d1_pre, 1);
++        d1 = sym_clip_s16(d1, tc2);
++        n_m2 = vadd_s16(m2, d1);
++    }
++    else
++    {
++        n_m2 = m2;
++    }
++
++    if (maskQ1)
++    {
++        int16x4_t avg64  = vrhadd_s16(m6, m4);
++        int16x4_t d2_pre = vsub_s16(vsub_s16(avg64, m5), delta_c);
++        int16x4_t d2     = vshr_n_s16(d2_pre, 1);
++        d2 = sym_clip_s16(d2, tc2);
++        n_m5 = vadd_s16(m5, d2);
++    }
++    else
++    {
++        n_m5 = m5;
++    }
++}
++
++/* EDGE_VER: srcStep=stride, offset=1. */
++static void pelFilterLumaWeak_neon_V(pixel *src, intptr_t srcStep, intptr_t offset,
++                                     int32_t tc, int32_t maskP, int32_t maskQ,
++                                     int32_t maskP1, int32_t maskQ1)
++{
++    (void)offset;
++    int32_t thrCut = tc * 10;
++    int16_t tc2 = (int16_t)(tc >> 1);
++    maskP1 &= maskP;
++    maskQ1 &= maskQ;
++
++    int16x4_t m[8];
++    transpose_4x8_to_8x4(src - 4, srcStep, m);
++
++    int16x4_t n_m2, n_m3, n_m4, n_m5;
++    uint16x4_t lane_mask;
++    weak_filter_4(m[1], m[2], m[3], m[4], m[5], m[6],
++                  (int16_t)tc, tc2, thrCut, maskP, maskQ, maskP1, maskQ1,
++                  n_m2, n_m3, n_m4, n_m5, lane_mask);
++
++    uint32_t orig_r[4];
++    memcpy(&orig_r[0], src + 0 * srcStep - 2, 4);
++    memcpy(&orig_r[1], src + 1 * srcStep - 2, 4);
++    memcpy(&orig_r[2], src + 2 * srcStep - 2, 4);
++    memcpy(&orig_r[3], src + 3 * srcStep - 2, 4);
++
++    uint8x8_t pm2 = pack_s16_to_u8(n_m2);
++    uint8x8_t pm3 = pack_s16_to_u8(n_m3);
++    uint8x8_t pm4 = pack_s16_to_u8(n_m4);
++    uint8x8_t pm5 = pack_s16_to_u8(n_m5);
++
++    /* Interleave bytes per row to form per-row 4-byte sequences:
++     *   row i bytes (cols -2,-1,0,+1) = {pm2[i], pm3[i], pm4[i], pm5[i]} */
++    uint8x8_t z23 = vzip_u8(pm2, pm3).val[0];
++    uint8x8_t z45 = vzip_u8(pm4, pm5).val[0];
++    uint16x4x2_t rows_pair = vzip_u16(vreinterpret_u16_u8(z23),
++                                      vreinterpret_u16_u8(z45));
++    uint32x2_t new_r01 = vreinterpret_u32_u16(rows_pair.val[0]);
++    uint32x2_t new_r23 = vreinterpret_u32_u16(rows_pair.val[1]);
++
++    uint32_t row_new[4];
++    row_new[0] = vget_lane_u32(new_r01, 0);
++    row_new[1] = vget_lane_u32(new_r01, 1);
++    row_new[2] = vget_lane_u32(new_r23, 0);
++    row_new[3] = vget_lane_u32(new_r23, 1);
++
++    /* Per-row mask: lane_mask has 4 lanes each 0xFFFF / 0. */
++    uint16_t mlow[4];
++    mlow[0] = vget_lane_u16(lane_mask, 0);
++    mlow[1] = vget_lane_u16(lane_mask, 1);
++    mlow[2] = vget_lane_u16(lane_mask, 2);
++    mlow[3] = vget_lane_u16(lane_mask, 3);
++
++    for (int i = 0; i < 4; i++)
++    {
++        uint32_t mask = mlow[i] ? 0xFFFFFFFFu : 0u;
++        uint32_t merged = (row_new[i] & mask) | (orig_r[i] & ~mask);
++        memcpy(src + i * srcStep - 2, &merged, 4);
++    }
++}
++
++/* EDGE_HOR: srcStep=1, offset=stride. */
++static void pelFilterLumaWeak_neon_H(pixel *src, intptr_t srcStep, intptr_t offset,
++                                     int32_t tc, int32_t maskP, int32_t maskQ,
++                                     int32_t maskP1, int32_t maskQ1)
++{
++    (void)srcStep;
++    int32_t thrCut = tc * 10;
++    int16_t tc2 = (int16_t)(tc >> 1);
++    maskP1 &= maskP;
++    maskQ1 &= maskQ;
++
++    int16x4_t m1 = maskP1 ? load4_s16(src - 3 * offset) : vdup_n_s16(0);
++    int16x4_t m2 = load4_s16(src - 2 * offset);
++    int16x4_t m3 = load4_s16(src - 1 * offset);
++    int16x4_t m4 = load4_s16(src + 0 * offset);
++    int16x4_t m5 = load4_s16(src + 1 * offset);
++    int16x4_t m6 = maskQ1 ? load4_s16(src + 2 * offset) : vdup_n_s16(0);
++
++    int16x4_t n_m2, n_m3, n_m4, n_m5;
++    uint16x4_t lane_mask;
++    weak_filter_4(m1, m2, m3, m4, m5, m6,
++                  (int16_t)tc, tc2, thrCut, maskP, maskQ, maskP1, maskQ1,
++                  n_m2, n_m3, n_m4, n_m5, lane_mask);
++
++    uint8x8_t mask_u8 = vmovn_u16(vcombine_u16(lane_mask, lane_mask));
++
++    if (maskP1)
++    {
++        uint8x8_t orig = vld1_u8(src - 2 * offset);
++        uint8x8_t new_bytes = pack_s16_to_u8(n_m2);
++        uint8x8_t out = vbsl_u8(mask_u8, new_bytes, orig);
++        vst1_lane_u32((uint32_t *)(src - 2 * offset), vreinterpret_u32_u8(out), 0);
++    }
++    {
++        uint8x8_t orig = vld1_u8(src - 1 * offset);
++        uint8x8_t new_bytes = pack_s16_to_u8(n_m3);
++        uint8x8_t out = vbsl_u8(mask_u8, new_bytes, orig);
++        vst1_lane_u32((uint32_t *)(src - 1 * offset), vreinterpret_u32_u8(out), 0);
++    }
++    {
++        uint8x8_t orig = vld1_u8(src + 0 * offset);
++        uint8x8_t new_bytes = pack_s16_to_u8(n_m4);
++        uint8x8_t out = vbsl_u8(mask_u8, new_bytes, orig);
++        vst1_lane_u32((uint32_t *)(src + 0 * offset), vreinterpret_u32_u8(out), 0);
++    }
++    if (maskQ1)
++    {
++        uint8x8_t orig = vld1_u8(src + 1 * offset);
++        uint8x8_t new_bytes = pack_s16_to_u8(n_m5);
++        uint8x8_t out = vbsl_u8(mask_u8, new_bytes, orig);
++        vst1_lane_u32((uint32_t *)(src + 1 * offset), vreinterpret_u32_u8(out), 0);
++    }
++}
++
++} /* anonymous namespace */
++
++namespace X265_NS
++{
++
++void setupDeblockPrimitives_neon(EncoderPrimitives &p)
++{
++    /* [0] = EDGE_VER, [1] = EDGE_HOR */
++    p.pelFilterLumaStrong[0] = pelFilterLumaStrong_V_neon;
++    p.pelFilterLumaStrong[1] = pelFilterLumaStrong_H_neon;
++    /* Weak V left as C: measured 0.93x vs the (now non-inline, GCC-auto-
++     * vectorised at -O3) C reference. The 4x4 transpose + per-lane mask
++     * merge can't beat the compiler's straight unrolled scalar pattern
++     * for this working-set size. */
++    p.pelFilterLumaWeak[1]   = pelFilterLumaWeak_neon_H;
++    /* Chroma left as scalar C — same reason. */
++}
++
++} /* namespace X265_NS */
++
++#else /* HIGH_BIT_DEPTH or !HAVE_NEON */
++
++namespace X265_NS
++{
++
++void setupDeblockPrimitives_neon(EncoderPrimitives &)
++{
++}
++
++} /* namespace X265_NS */
++
++#endif
+--- a/source/common/aarch64/fun-decls.h	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/aarch64/fun-decls.h	2026-07-01 13:59:51.849915787 +0100
 @@ -169,10 +169,10 @@
  uint64_t PFX(pixel_var_32x32_neon(const pixel* pix, intptr_t stride));
  uint64_t PFX(pixel_var_64x64_neon(const pixel* pix, intptr_t stride));
@@ -47,8 +657,18 @@
  
  void PFX(scale1D_128to64_sve2(pixel *dst, const pixel *src));
  void PFX(scale2D_64to32_sve2(pixel* dst, const pixel* src, intptr_t stride));
---- a/source/common/aarch64/pixel-prim.cpp
-+++ b/source/common/aarch64/pixel-prim.cpp
+--- a/source/common/aarch64/loopfilter-prim.h	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/aarch64/loopfilter-prim.h	2026-06-30 12:47:59.813468214 +0100
+@@ -9,6 +9,7 @@
+ namespace X265_NS
+ {
+ void setupLoopFilterPrimitives_neon(EncoderPrimitives &p);
++void setupDeblockPrimitives_neon(EncoderPrimitives &p);
+ 
+ };
+ 
+--- a/source/common/aarch64/pixel-prim.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/aarch64/pixel-prim.cpp	2026-07-01 11:17:20.249291486 +0100
 @@ -1482,7 +1482,8 @@
  }
  
@@ -72,8 +692,8 @@
      }
  }
  
---- a/source/common/aarch64/pixel-util.S
-+++ b/source/common/aarch64/pixel-util.S
+--- a/source/common/aarch64/pixel-util.S	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/aarch64/pixel-util.S	2026-07-01 13:57:31.637500652 +0100
 @@ -97,64 +97,66 @@
      ret
  endfunc
@@ -171,8 +791,8 @@
  .endr
      cbnz            w12, .Loop_residual_32
      ret
---- a/source/common/aarch64/pixel-util-sve2.S
-+++ b/source/common/aarch64/pixel-util-sve2.S
+--- a/source/common/aarch64/pixel-util-sve2.S	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/aarch64/pixel-util-sve2.S	2026-07-01 13:58:13.533624846 +0100
 @@ -230,22 +230,25 @@
      ret
  endfunc
@@ -274,9 +894,142 @@
  .endr
      ret
  endfunc
---- a/source/common/cudata.cpp
-+++ b/source/common/cudata.cpp
-@@ -493,47 +493,114 @@
+--- a/source/common/CMakeLists.txt	2026-06-26 15:31:47.448698270 +0100
++++ b/source/common/CMakeLists.txt	2026-06-30 12:47:59.893468425 +0100
+@@ -104,7 +104,7 @@
+     endif()
+ 
+     # Add Arm intrinsics files here.
+-    set(C_SRCS_NEON asm-primitives.cpp pixel-prim.h pixel-prim.cpp filter-prim.h filter-prim.cpp dct-prim.h dct-prim.cpp loopfilter-prim.cpp loopfilter-prim.h intrapred-prim.cpp arm64-utils.cpp arm64-utils.h fun-decls.h sao-prim.cpp  mem-neon.h)
++    set(C_SRCS_NEON asm-primitives.cpp pixel-prim.h pixel-prim.cpp filter-prim.h filter-prim.cpp dct-prim.h dct-prim.cpp loopfilter-prim.cpp loopfilter-prim.h deblock-prim.cpp intrapred-prim.cpp arm64-utils.cpp arm64-utils.h fun-decls.h sao-prim.cpp  mem-neon.h)
+     set(C_SRCS_NEON_DOTPROD filter-neon-dotprod.cpp)
+     set(C_SRCS_NEON_I8MM filter-neon-i8mm.cpp)
+     set(C_SRCS_SVE sao-prim-sve.cpp dct-prim-sve.cpp)
+--- a/source/common/cudata.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/cudata.cpp	2026-07-29 16:32:53.176160587 +0100
+@@ -295,24 +295,46 @@
+     m_lastIntraBCMv[1].set(0, 0);
+ #endif
+ 
+-    /* sequential memsets */
++    /* In a plain encode nothing reads the pic-CTU per-part block before the
++     * full-CTU commit (copyToPic) overwrites all of it: every consumer of a
++     * pre-commit read (bAlreadyDecided sentinel, bDecidedDepth, bCtuInfoCheck,
++     * qprdRefine, refine/multi-pass paths) is gated on one of the features
++     * below, and out-of-picture children are zeroed explicitly in the split
++     * loops. Skipping the init here removes a full double-write of the
++     * ~BytesPerPartition*numPartitions block per CTU. The one exception is
++     * m_qp: topSkipMinDepth() reads parentCTU.m_qp[0] pre-commit, so it is
++     * kept unconditional. */
++    const x265_param* iparam = frame.m_encData->m_param;
+     m_partSet((uint8_t*)m_qp, (uint8_t)qp);
+-    m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
+-    m_partSet(m_log2CUSize,   (uint8_t)m_slice->m_param->maxLog2CUSize);
+-    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
+-    m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
+-    m_partSet(m_tqBypass,     (uint8_t)frame.m_encData->m_param->bLossless);
+-    if (m_slice->m_sliceType != I_SLICE)
++    bool bNeedPartInit = iparam->analysisLoad[0] || iparam->analysisSave[0] ||
++        iparam->bAnalysisType != DEFAULT || iparam->bCTUInfo ||
++        /* mvRefine defaults to 1 but is only consumed under analysisLoad/
++         * interRefine gates, so it must not force the init on its own */
++        iparam->intraRefine || iparam->interRefine ||
++        iparam->bDynamicRefine ||
++        iparam->analysisMultiPassRefine || iparam->analysisMultiPassDistortion ||
++        iparam->bEnableRdRefine || iparam->bOptCUDeltaQP;
++
++    if (bNeedPartInit)
+     {
+-        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
+-        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
++        /* sequential memsets */
++        m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
++        m_partSet(m_log2CUSize,   (uint8_t)m_slice->m_param->maxLog2CUSize);
++        m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
++        m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
++        m_partSet(m_tqBypass,     (uint8_t)frame.m_encData->m_param->bLossless);
++        if (m_slice->m_sliceType != I_SLICE)
++        {
++            m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
++            m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
++        }
++
++        /* initialize the remaining CU data in one memset */
++        memset(m_cuDepth, 0, (frame.m_param->internalCsp == X265_CSP_I400 ? BytesPerPartition - 12 : BytesPerPartition - 8) * m_numPartitions);
+     }
+ 
+     X265_CHECK(!(frame.m_encData->m_param->bLossless && !m_slice->m_pps->bTransquantBypassEnabled), "lossless enabled without TQbypass in PPS\n");
+ 
+-    /* initialize the remaining CU data in one memset */
+-    memset(m_cuDepth, 0, (frame.m_param->internalCsp == X265_CSP_I400 ? BytesPerPartition - 12 : BytesPerPartition - 8) * m_numPartitions);
+-
+     for (int8_t i = 0; i < NUM_TU_DEPTH; i++)
+         m_refTuDepth[i] = -1;
+ 
+@@ -326,6 +348,19 @@
+     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
+ }
+ 
++/* The per-part init block (m_qp .. m_chromaIntraDir) is one contiguous charBuf
++ * region whose contents depend only on (depth, qp) for a given encode; capture
++ * it once per (depth, qp) and replay with a single memcpy instead of eight
++ * indirect broadcast calls plus a memset per initSubCU. */
++struct SubCUInitTemplate
++{
++    int      qp;
++    uint32_t bytes;  // 0 = invalid
++    uint8_t  lossless;
++    uint8_t  buf[CUData::BytesPerPartition * MAX_NUM_PARTITIONS];
++};
++static __thread SubCUInitTemplate s_subCUTpl[NUM_FULL_DEPTH];
++
+ // initialize Sub partition
+ #if ENABLE_SCC_EXT
+ void CUData::initSubCU(const CUData& ctu, const CUGeom& cuGeom, int qp, MV lastIntraBCMv[2])
+@@ -354,19 +389,31 @@
+ 
+     X265_CHECK(m_numPartitions == cuGeom.numPartitions, "initSubCU() size mismatch\n");
+ 
+-    m_partSet((uint8_t*)m_qp, (uint8_t)qp);
+-    m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
++    uint32_t initBytes = (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 4 : BytesPerPartition) * m_numPartitions;
++    SubCUInitTemplate& tpl = s_subCUTpl[cuGeom.depth];
++    if (tpl.bytes == initBytes && tpl.qp == qp && tpl.lossless == (uint8_t)m_encData->m_param->bLossless)
++        memcpy(m_qp, tpl.buf, initBytes);
++    else
++    {
++        m_partSet((uint8_t*)m_qp, (uint8_t)qp);
++        m_partSet((uint8_t*)m_qpAnalysis, (uint8_t)qp);
++
++        m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
++        m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
++        m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
++        m_partSet(m_tqBypass,     (uint8_t)m_encData->m_param->bLossless);
++        m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
++        m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
++        m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
+ 
+-    m_partSet(m_log2CUSize,   (uint8_t)cuGeom.log2CUSize);
+-    m_partSet(m_lumaIntraDir, (uint8_t)ALL_IDX);
+-    m_partSet(m_chromaIntraDir, (uint8_t)ALL_IDX);
+-    m_partSet(m_tqBypass,     (uint8_t)m_encData->m_param->bLossless);
+-    m_partSet((uint8_t*)m_refIdx[0], (uint8_t)REF_NOT_VALID);
+-    m_partSet((uint8_t*)m_refIdx[1], (uint8_t)REF_NOT_VALID);
+-    m_partSet(m_cuDepth,      (uint8_t)cuGeom.depth);
++        /* initialize the remaining CU data in one memset */
++        memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
+ 
+-    /* initialize the remaining CU data in one memset */
+-    memset(m_predMode, 0, (ctu.m_chromaFormat == X265_CSP_I400 ? BytesPerPartition - 13 : BytesPerPartition - 9) * m_numPartitions);
++        memcpy(tpl.buf, m_qp, initBytes);
++        tpl.qp = qp;
++        tpl.bytes = initBytes;
++        tpl.lossless = (uint8_t)m_encData->m_param->bLossless;
++    }
+     memset(m_distortion, 0, m_numPartitions * sizeof(sse_t));
+ 
+ #if ENABLE_SCC_EXT
+@@ -493,47 +540,131 @@
  {
      CUData& ctu = *m_encData->getPicCTU(m_cuAddr);
  
@@ -392,29 +1145,45 @@
      uint32_t tmpY2 = m_absIdxInCTU << (LOG2_UNIT_SIZE * 2);
 -    memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
  
--    if (ctu.m_chromaFormat != X265_CSP_I400)
-+    /* Phase 6b: coeff planes are contiguous in trCoeffMemBlock at offsets 0
-+     * (Y), sizeL (Cb), sizeL+sizeC (Cr).  At a full-CTU commit the three
-+     * separate memcpys collapse to one. */
-+    if (m_absIdxInCTU == 0 && ctu.m_chromaFormat != X265_CSP_I400 &&
-+        m_hChromaShift == ctu.m_hChromaShift && m_vChromaShift == ctu.m_vChromaShift)
-     {
++    /* Phase 11: the picture CTU's coefficients are only ever read under a cbf
++     * check (Entropy::codeCoeffNxN via getCbf; copyFromPic never reads them),
++     * so planes with no coded residual anywhere in this CU need not be
++     * committed.  Skip-heavy encodes drop most of the coeff traffic. */
++    bool cbfY = false, cbfC = false;
++    for (uint32_t i = 0; i < m_numPartitions; i++)
++        cbfY |= m_cbf[0][i] != 0;
+     if (ctu.m_chromaFormat != X265_CSP_I400)
+-    {
 -        m_partCopy(ctu.m_transformSkip[1] + m_absIdxInCTU, m_transformSkip[1]);
 -        m_partCopy(ctu.m_transformSkip[2] + m_absIdxInCTU, m_transformSkip[2]);
 -        m_partCopy(ctu.m_cbf[1] + m_absIdxInCTU, m_cbf[1]);
 -        m_partCopy(ctu.m_cbf[2] + m_absIdxInCTU, m_cbf[2]);
 -        m_partCopy(ctu.m_chromaIntraDir + m_absIdxInCTU, m_chromaIntraDir);
--
++        for (uint32_t i = 0; i < m_numPartitions; i++)
++            cbfC |= (m_cbf[1][i] | m_cbf[2][i]) != 0;
+ 
++    /* Phase 6b: coeff planes are contiguous in trCoeffMemBlock at offsets 0
++     * (Y), sizeL (Cb), sizeL+sizeC (Cr).  At a full-CTU commit the three
++     * separate memcpys collapse to one. */
++    if (m_absIdxInCTU == 0 && ctu.m_chromaFormat != X265_CSP_I400 &&
++        m_hChromaShift == ctu.m_hChromaShift && m_vChromaShift == ctu.m_vChromaShift)
++    {
          uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
 -        uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
 -        memcpy(ctu.m_trCoeff[1] + tmpC2, m_trCoeff[1], sizeof(coeff_t) * tmpC);
 -        memcpy(ctu.m_trCoeff[2] + tmpC2, m_trCoeff[2], sizeof(coeff_t) * tmpC);
-+        memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
++        if (cbfY && cbfC)
++            memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * (tmpY + 2 * tmpC));
++        else if (cbfY)
++            memcpy(ctu.m_trCoeff[0], m_trCoeff[0], sizeof(coeff_t) * tmpY);
++        else if (cbfC)
++            memcpy(ctu.m_trCoeff[1], m_trCoeff[1], sizeof(coeff_t) * 2 * tmpC);
 +    }
 +    else
 +    {
-+        memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
-+        if (ctu.m_chromaFormat != X265_CSP_I400)
++        if (cbfY)
++            memcpy(ctu.m_trCoeff[0] + tmpY2, m_trCoeff[0], sizeof(coeff_t)* tmpY);
++        if (ctu.m_chromaFormat != X265_CSP_I400 && cbfC)
 +        {
 +            uint32_t tmpC = tmpY >> (m_hChromaShift + m_vChromaShift);
 +            uint32_t tmpC2 = tmpY2 >> (m_hChromaShift + m_vChromaShift);
@@ -424,8 +1193,77 @@
      }
  }
  
---- a/source/common/pixel.cpp
-+++ b/source/common/pixel.cpp
+--- a/source/common/deblock.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/deblock.cpp	2026-06-30 12:47:59.893468425 +0100
+@@ -409,7 +409,7 @@
+             int32_t maskP1 = (dp < sideThreshold ? -1 : 0);
+             int32_t maskQ1 = (dq < sideThreshold ? -1 : 0);
+ 
+-            pelFilterLuma(src + unitOffset, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
++            primitives.pelFilterLumaWeak[dir](src + unitOffset, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+         }
+     }
+ }
+--- a/source/common/loopfilter.cpp	2026-06-26 15:31:47.452698281 +0100
++++ b/source/common/loopfilter.cpp	2026-06-30 12:47:59.837468277 +0100
+@@ -172,6 +172,47 @@
+         src[0]        = x265_clip(m4 - (delta & maskQ));
+     }
+ }
++
++/* WEAK luma filter — extracted from inline pelFilterLuma in deblock.cpp
++ * so it can be dispatched through the primitive table and accelerated. */
++static void pelFilterLumaWeak_c(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc,
++                                int32_t maskP, int32_t maskQ, int32_t maskP1, int32_t maskQ1)
++{
++    int32_t thrCut = tc * 10;
++    int32_t tc2 = tc >> 1;
++    maskP1 &= maskP;
++    maskQ1 &= maskQ;
++
++    for (int32_t i = 0; i < UNIT_SIZE; i++, src += srcStep)
++    {
++        int16_t m4 = (int16_t)src[0];
++        int16_t m3 = (int16_t)src[-offset];
++        int16_t m5 = (int16_t)src[offset];
++        int16_t m2 = (int16_t)src[-offset * 2];
++
++        int32_t delta = (9 * (m4 - m3) - 3 * (m5 - m2) + 8) >> 4;
++
++        if (abs(delta) < thrCut)
++        {
++            delta = x265_clip3(-tc, tc, delta);
++
++            src[-offset] = x265_clip(m3 + (delta & maskP));
++            src[0]       = x265_clip(m4 - (delta & maskQ));
++            if (maskP1)
++            {
++                int16_t m1 = (int16_t)src[-offset * 3];
++                int32_t delta1 = x265_clip3(-tc2, tc2, ((((m1 + m3 + 1) >> 1) - m2 + delta) >> 1));
++                src[-offset * 2] = x265_clip(m2 + delta1);
++            }
++            if (maskQ1)
++            {
++                int16_t m6 = (int16_t)src[offset * 2];
++                int32_t delta2 = x265_clip3(-tc2, tc2, ((((m6 + m4 + 1) >> 1) - m5 - delta) >> 1));
++                src[offset] = x265_clip(m5 + delta2);
++            }
++        }
++    }
++}
+ }
+ 
+ namespace X265_NS {
+@@ -192,5 +233,7 @@
+     p.pelFilterLumaStrong[1] = pelFilterLumaStrong_c;
+     p.pelFilterChroma[0]     = pelFilterChroma_c;
+     p.pelFilterChroma[1]     = pelFilterChroma_c;
++    p.pelFilterLumaWeak[0]   = pelFilterLumaWeak_c;
++    p.pelFilterLumaWeak[1]   = pelFilterLumaWeak_c;
+ }
+ }
+--- a/source/common/pixel.cpp	2026-06-26 15:31:47.456698292 +0100
++++ b/source/common/pixel.cpp	2026-07-02 10:05:24.029263413 +0100
 @@ -368,6 +368,7 @@
      return cost;
  }
@@ -456,8 +1294,8 @@
      }
  }
  
---- a/source/common/primitives.h
-+++ b/source/common/primitives.h
+--- a/source/common/primitives.h	2026-06-26 15:31:47.456698292 +0100
++++ b/source/common/primitives.h	2026-07-02 10:05:40.029305573 +0100
 @@ -154,7 +154,13 @@
  typedef void (*idct_t)(const int16_t* src, int16_t* dst, intptr_t dstStride);
  typedef void (*denoiseDct_t)(int16_t* dctCoef, uint32_t* resSum, const uint16_t* offset, int numCoeff);
@@ -473,8 +1311,27 @@
  typedef void (*transpose_t)(pixel* dst, const pixel* src, intptr_t stride);
  typedef uint32_t (*quant_t)(const int16_t* coef, const int32_t* quantCoeff, int32_t* deltaU, int16_t* qCoef, int qBits, int add, int numCoeff);
  typedef uint32_t (*nquant_t)(const int16_t* coef, const int32_t* quantCoeff, int16_t* qCoef, int qBits, int add, int numCoeff);
---- a/source/common/shortyuv.cpp
-+++ b/source/common/shortyuv.cpp
+@@ -223,6 +229,10 @@
+ 
+ typedef void (*pelFilterLumaStrong_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tcP, int32_t tcQ);
+ typedef void (*pelFilterChroma_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc, int32_t maskP, int32_t maskQ);
++/* Weak luma deblock primitive — added 2026-06-26 alongside aarch64 NEON port.
++ * Replaces the inline pelFilterLuma in common/deblock.cpp. C fallback is
++ * registered in common/loopfilter.cpp::setupLoopFilterPrimitives_c. */
++typedef void (*pelFilterLumaWeak_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc, int32_t maskP, int32_t maskQ, int32_t maskP1, int32_t maskQ1);
+ 
+ typedef void (*integralv_t)(uint32_t *sum, intptr_t stride);
+ typedef void (*integralh_t)(uint32_t *sum, pixel *pix, intptr_t stride);
+@@ -381,6 +391,7 @@
+ 
+     pelFilterLumaStrong_t pelFilterLumaStrong[2]; // EDGE_VER = 0, EDGE_HOR = 1
+     pelFilterChroma_t     pelFilterChroma[2];     // EDGE_VER = 0, EDGE_HOR = 1
++    pelFilterLumaWeak_t   pelFilterLumaWeak[2];   // EDGE_VER = 0, EDGE_HOR = 1
+ 
+     integralv_t            integral_initv[NUM_INTEGRAL_SIZE];
+     integralh_t            integral_inith[NUM_INTEGRAL_SIZE];
+--- a/source/common/shortyuv.cpp	2026-06-26 15:31:47.456698292 +0100
++++ b/source/common/shortyuv.cpp	2026-07-01 10:38:19.990468947 +0100
 @@ -40,15 +40,26 @@
  bool ShortYuv::create(uint32_t size, int csp)
  {
@@ -530,8 +1387,8 @@
  }
  
  void ShortYuv::subtract(const Yuv& srcYuv0, const Yuv& srcYuv1, uint32_t log2Size, int picCsp)
---- a/source/common/shortyuv.h
-+++ b/source/common/shortyuv.h
+--- a/source/common/shortyuv.h	2026-06-26 15:31:47.456698292 +0100
++++ b/source/common/shortyuv.h	2026-07-01 10:37:54.826398353 +0100
 @@ -41,8 +41,11 @@
  
      int16_t* m_buf[3];
@@ -546,8 +1403,8 @@
  
      int      m_csp;
      int      m_hChromaShift;
---- a/source/common/yuv.cpp
-+++ b/source/common/yuv.cpp
+--- a/source/common/yuv.cpp	2026-06-26 15:31:47.464698315 +0100
++++ b/source/common/yuv.cpp	2026-07-29 16:21:50.186063694 +0100
 @@ -29,6 +29,30 @@
  #include "picyuv.h"
  #include "primitives.h"
@@ -796,8 +1653,8 @@
  /* This version is intended for use by ME, which required FENC_STRIDE for luma fenc pixels */
  void Yuv::copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma)
  {
---- a/source/common/yuv.h
-+++ b/source/common/yuv.h
+--- a/source/common/yuv.h	2026-06-26 15:31:47.464698315 +0100
++++ b/source/common/yuv.h	2026-07-29 16:21:50.186063694 +0100
 @@ -49,11 +49,49 @@
      int      m_vChromaShift;
      uint32_t *m_integral[2][MAX_NUM_REF][INTEGRAL_PLANE_NUM];
@@ -864,8 +1721,8 @@
      // Copy portion of srcYuv into ME prediction buffer
      void   copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma);
  
---- a/source/encoder/analysis.cpp
-+++ b/source/encoder/analysis.cpp
+--- a/source/encoder/analysis.cpp	2026-06-26 15:31:47.468698327 +0100
++++ b/source/encoder/analysis.cpp	2026-07-31 10:24:00.110391664 +0100
 @@ -101,14 +101,44 @@
      {
          ModeDepth &md = m_modeDepth[depth];
@@ -924,6 +1781,15 @@
  
      if (m_param->bSsimRd)
          calculateNormFactor(ctu, qp);
+@@ -540,7 +571,7 @@
+     bool mightSplit = !(cuGeom.flags & CUGeom::LEAF);
+     bool mightNotSplit = !(cuGeom.flags & CUGeom::SPLIT_MANDATORY);
+ 
+-    bool bAlreadyDecided = m_param->intraRefine != 4 && parentCTU.m_lumaIntraDir[cuGeom.absPartIdx] != (uint8_t)ALL_IDX && !(m_param->bAnalysisType == HEVC_INFO);
++    bool bAlreadyDecided = m_param->analysisLoad[0] && m_param->intraRefine != 4 && parentCTU.m_lumaIntraDir[cuGeom.absPartIdx] != (uint8_t)ALL_IDX && !(m_param->bAnalysisType == HEVC_INFO);
+     bool bDecidedDepth = m_param->intraRefine != 4 && parentCTU.m_cuDepth[cuGeom.absPartIdx] == depth;
+     int split = 0;
+     if (m_param->intraRefine && m_param->intraRefine != 4)
 @@ -1863,11 +1894,20 @@
                              cu.getInterTUQtDepthRange(tuDepthRange, 0);
                              m_rqt[cuGeom.depth].tmpResiYuv.subtract(*md.bestMode->fencYuv, md.bestMode->predYuv, cuGeom.log2CUSize, m_frame->m_fencPic->m_picCsp);
@@ -982,8 +1848,23 @@
  
          if ((m_limitTU & X265_TU_LIMIT_NEIGH) && cuGeom.log2CUSize >= 4)
          {
---- a/source/encoder/search.cpp
-+++ b/source/encoder/search.cpp
+@@ -3919,6 +3972,14 @@
+ 
+ uint32_t Analysis::topSkipMinDepth(const CUData& parentCTU, const CUGeom& cuGeom)
+ {
++    /* Search-budget: at 16x16 CTUs this heuristic can only ever skip the
++     * depth-0 evaluation, and reading the co-located ref CTU's m_cuDepth is
++     * a chain of dependent cache misses paid for every CU (~3% of encode
++     * cycles at ultrafast).  Always searching from depth 0 costs nothing on
++     * typical content and can only improve RD. */
++    if (m_param->maxCUSize == 16)
++        return 0;
++
+     /* Do not attempt to code a block larger than the largest block in the
+      * co-located CTUs in L0 and L1 */
+     int currentQP = parentCTU.m_qp[0];
+--- a/source/encoder/search.cpp	2026-06-26 15:31:47.468698327 +0100
++++ b/source/encoder/search.cpp	2026-07-31 10:26:13.038785364 +0100
 @@ -342,7 +342,9 @@
          const pixel* fenc = mode.fencYuv->getLumaAddr(absPartIdx);
          pixel*   pred     = mode.predYuv.getLumaAddr(absPartIdx);
@@ -1398,7 +2279,7 @@
      bmode = mode = DC_IDX;
      bbits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
      bcost = m_rdCost.calcRdSADCost(bsad, bbits);
-@@ -1379,8 +1402,8 @@
+@@ -1379,15 +1402,19 @@
      if (tuSize & (8 | 16 | 32))
          planar = intraNeighbourBuf[1];
  
@@ -1409,7 +2290,19 @@
      mode = PLANAR_IDX;
      bits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
      cost = m_rdCost.calcRdSADCost(sad, bits);
-@@ -1562,10 +1585,12 @@
+     COPY4_IF_LT(bcost, cost, bmode, mode, bsad, sad, bbits, bits);
+ 
+     bool allangs = true;
+-    if (primitives.cu[sizeIdx].intra_pred_allangs)
++    /* Search-budget: fast-intra tries ~13 of 33 angular modes, so batch-
++     * generating all 33 (plus the fenc transpose) wastes most of the allangs
++     * work.  Generate per-mode instead; sa8d is transpose-invariant, so the
++     * costs (and every decision downstream) are identical. */
++    if (primitives.cu[sizeIdx].intra_pred_allangs && !m_param->bEnableFastIntra)
+     {
+         primitives.cu[sizeIdx].transpose(m_fencTransposed, fenc, scaleStride);
+         primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16)); 
+@@ -1562,10 +1589,12 @@
  
                  // determine set of modes to be tested (using prediction signal only)
                  const pixel* fenc = fencYuv->getLumaAddr(absPartIdx);
@@ -1424,7 +2317,7 @@
                  int costShift = 0;
  
                  m_entropyCoder.loadIntraDirModeLuma(m_rqt[depth].cur);
-@@ -1582,9 +1607,12 @@
+@@ -1582,9 +1611,12 @@
                  uint64_t modeCosts[35];
  
                  // DC
@@ -1439,7 +2332,7 @@
                  modeCosts[DC_IDX] = bcost = m_rdCost.calcRdSADCost(sad, bits);
  
                  // PLANAR
-@@ -1592,16 +1620,16 @@
+@@ -1592,16 +1624,16 @@
                  if (tuSize >= 8 && tuSize <= 32)
                      planar = intraNeighbourBuf[1];
  
@@ -1459,7 +2352,7 @@
                      primitives.cu[sizeIdx].intra_pred_allangs(m_intraPredAngs, intraNeighbourBuf[0], intraNeighbourBuf[1], (scaleTuSize <= 16));
                      for (int mode = 2; mode < 35; mode++)
                      {
-@@ -1609,7 +1637,7 @@
+@@ -1609,7 +1641,7 @@
                          if (mode < 18)
                              sad = sa8d(m_fencTransposed, scaleTuSize, &m_intraPredAngs[(mode - 2) * (scaleTuSize * scaleTuSize)], scaleTuSize) << costShift;
                          else
@@ -1468,7 +2361,7 @@
                          modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
                          COPY1_IF_LT(bcost, modeCosts[mode]);
                      }
-@@ -1621,7 +1649,7 @@
+@@ -1621,7 +1653,7 @@
                          bits = (mpms & ((uint64_t)1 << mode)) ? m_entropyCoder.bitsIntraModeMPM(mpmModes, mode) : rbits;
                          int filter = !!(g_intraFilterFlags[mode] & scaleTuSize);
                          primitives.cu[sizeIdx].intra_pred[mode](m_intraPred, scaleTuSize, intraNeighbourBuf[filter], mode, scaleTuSize <= 16);
@@ -1477,7 +2370,7 @@
                          modeCosts[mode] = m_rdCost.calcRdSADCost(sad, bits);
                          COPY1_IF_LT(bcost, modeCosts[mode]);
                      }
-@@ -1749,9 +1777,9 @@
+@@ -1749,9 +1781,9 @@
              const pixel* fenc = fencYuv->m_buf[chromaId];
              pixel* pred = predYuv->m_buf[chromaId];
              Predict::initAdiPatternChroma(cu, cuGeom, 0, intraNeighbors, chromaId);
@@ -1490,7 +2383,7 @@
          }
  
          if (cost < bestCost)
-@@ -4593,6 +4621,10 @@
+@@ -4593,6 +4625,10 @@
      cu.clearCbf();
      cu.setTUDepthSubParts(0, 0, depth);
  
@@ -1501,7 +2394,7 @@
      reconYuv->copyFromYuv(interMode.predYuv);
  
      // Luma
-@@ -4682,8 +4714,8 @@
+@@ -4682,8 +4718,8 @@
          sse_t cbf0Dist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
          if (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400)
          {
@@ -1512,7 +2405,7 @@
          }
  
          /* Consider the RD cost of not signaling any residual */
-@@ -4754,10 +4786,17 @@
+@@ -4754,10 +4790,17 @@
  
      m_entropyCoder.store(interMode.contexts);
  
@@ -1531,7 +2424,7 @@
  
      // update with clipped distortion and cost (qp estimation loop uses unclipped values)
      sse_t bestLumaDist = primitives.cu[sizeIdx].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size);
-@@ -4774,7 +4813,6 @@
+@@ -4774,7 +4817,6 @@
      else if(m_rdCost.m_ssimRd)
          interMode.ssimEnergy = m_quant.ssimDistortion(cu, fencYuv->m_buf[0], fencYuv->m_size, reconYuv->m_buf[0], reconYuv->m_size, cu.m_log2CUSize[0], TEXT_LUMA, 0);
  
@@ -1539,3 +2432,570 @@
      interMode.totalBits = bits;
      interMode.lumaDistortion = bestLumaDist;
      interMode.coeffBits = coeffBits;
+--- a/source/input/input.h	2026-06-26 15:31:47.468698327 +0100
++++ b/source/input/input.h	2026-07-29 16:32:49.820150021 +0100
+@@ -56,6 +56,19 @@
+     const char *filename;
+ };
+ 
++/* Destination geometry for direct ingest: each ring slot is laid out exactly
++ * like the encoder's internal fenc PicYuv (margins and strides included) so
++ * the encoder can alias the slot with no intermediate copy (--no-copy-pic) */
++struct FrameBufGeometry
++{
++    uint32_t slotBytes;      /* total allocation per ring slot */
++    uint32_t planeOffset[3]; /* byte offset of each plane origin within the slot */
++    uint32_t stride[3];      /* destination stride of each plane, in bytes */
++    uint32_t rows[3];        /* source rows per plane */
++    uint32_t rowBytes[3];    /* source row length per plane, in bytes */
++    uint32_t slots;          /* required ring depth (frames pinned in-flight + prefetch) */
++};
++
+ class InputFile
+ {
+ protected:
+@@ -74,6 +87,22 @@
+ 
+     virtual bool readPicture(x265_picture& pic) = 0;
+ 
++    /* Opt in to zero-copy frame handoff: readPicture() hands out pointers into
++     * the reader's internal ring and the slot stays valid until the consumer
++     * calls releaseFrame() (in read order, one call per successful read).
++     * Returns false if the reader does not support this mode. */
++    virtual bool enableZeroCopy() { return false; }
++
++    /* Stronger form of zero-copy: the reader re-allocates its ring in the
++     * encoder's fenc geometry and scatters file rows directly into place, so
++     * the slot can be aliased as the frame's PicYuv (bCopyPicToFrame=0).
++     * Slots stay pinned until releaseFrame(), one call per *encoded output*.
++     * Must be called before startReader(). Returns false if unsupported or if
++     * the geometry does not match the stream. Implies zero-copy handoff. */
++    virtual bool enableDirectIngest(const FrameBufGeometry&) { return false; }
++
++    virtual void releaseFrame() {}
++
+     virtual bool isEof() const = 0;
+ 
+     virtual bool isFail() = 0;
+--- a/source/input/yuv.cpp	2026-06-26 15:31:47.468698327 +0100
++++ b/source/input/yuv.cpp	2026-07-29 16:32:49.820150021 +0100
+@@ -35,6 +35,14 @@
+ #if defined(_MSC_VER)
+ #pragma warning(disable: 4996) // POSIX setmode and fileno deprecated
+ #endif
++#else
++#include <sys/uio.h>
++#include <unistd.h>
++#include <limits.h>
++#include <errno.h>
++#ifndef IOV_MAX
++#define IOV_MAX 1024
++#endif
+ #endif
+ 
+ using namespace X265_NS;
+@@ -42,7 +50,9 @@
+ 
+ YUVInput::YUVInput(InputFileInfo& info, bool alpha, int format)
+ {
+-    for (int i = 0; i < QUEUE_SIZE; i++)
++    ringSlots = QUEUE_SIZE;
++    buf = X265_MALLOC(char*, ringSlots);
++    for (int i = 0; i < ringSlots; i++)
+         buf[i] = NULL;
+ 
+     depth = info.depth;
+@@ -52,6 +62,10 @@
+     alphaAvailable = alpha;
+     threadActive = false;
+     ifs = NULL;
++    zeroCopy = false;
++    directIngest = false;
++    sawEof = false;
++    readCursor = 0;
+ 
+     uint32_t pixelbytes = depth > 8 ? 2 : 1;
+     framesize = 0;
+@@ -76,6 +90,11 @@
+     }
+     else
+         ifs = x265_fopen(info.filename, "rb");
++    if (ifs)
++        /* all reads are >= one frame, so stdio buffering only adds a copy;
++         * unbuffered also keeps the fd position coherent with the readv()
++         * path used by direct ingest */
++        setvbuf(ifs, NULL, _IONBF, 0);
+     if (ifs && !ferror(ifs))
+         threadActive = true;
+     else
+@@ -86,7 +105,7 @@
+         return;
+     }
+ 
+-    for (uint32_t i = 0; i < QUEUE_SIZE; i++)
++    for (int i = 0; i < ringSlots; i++)
+     {
+         buf[i] = X265_MALLOC(char, framesize);
+         if (buf[i] == NULL)
+@@ -125,10 +144,112 @@
+ {
+     if (ifs && ifs != stdin)
+         fclose(ifs);
+-    for (int i = 0; i < QUEUE_SIZE; i++)
++    if (buf)
++        for (int i = 0; i < ringSlots; i++)
++            X265_FREE(buf[i]);
++    X265_FREE(buf);
++}
++
++bool YUVInput::enableDirectIngest(const FrameBufGeometry& g)
++{
++#if _WIN32
++    (void)g;
++    return false;
++#else
++    if (!threadActive || depth > 8 || x265_cli_csps[colorSpace].planes != 3 || alphaAvailable)
++        return false;
++
++    /* the source geometry must account for every byte of the packed frame,
++     * or the readv() scatter would fall out of sync with the stream */
++    uint64_t total = 0;
++    for (int p = 0; p < 3; p++)
++    {
++        total += (uint64_t)g.rows[p] * g.rowBytes[p];
++        if (g.planeOffset[p] + (uint64_t)(g.rows[p] ? g.rows[p] - 1 : 0) * g.stride[p] + g.rowBytes[p] > g.slotBytes)
++            return false;
++    }
++    if (total != framesize || g.slots < QUEUE_SIZE)
++        return false;
++
++    char** newBuf = X265_MALLOC(char*, g.slots);
++    if (!newBuf)
++        return false;
++    for (uint32_t i = 0; i < g.slots; i++)
++    {
++        newBuf[i] = X265_MALLOC(char, g.slotBytes);
++        if (!newBuf[i])
++        {
++            for (uint32_t j = 0; j < i; j++)
++                X265_FREE(newBuf[j]);
++            X265_FREE(newBuf);
++            return false;
++        }
++    }
++
++    for (int i = 0; i < ringSlots; i++)
+         X265_FREE(buf[i]);
++    X265_FREE(buf);
++
++    buf = newBuf;
++    ringSlots = (int)g.slots;
++    geo = g;
++    directIngest = true;
++    zeroCopy = true;
++    return true;
++#endif
+ }
+ 
++#if !_WIN32
++bool YUVInput::readFrameDirect(char* slot)
++{
++    /* scatter each packed source row into its strided destination */
++    struct iovec iov[IOV_MAX];
++    int fd = fileno(ifs);
++    int n = 0;
++
++    for (int p = 0; p < 3; p++)
++    {
++        char* dst = slot + geo.planeOffset[p];
++        for (uint32_t r = 0; r < geo.rows[p]; r++, dst += geo.stride[p])
++        {
++            iov[n].iov_base = dst;
++            iov[n].iov_len = geo.rowBytes[p];
++            if (++n == IOV_MAX || (p == 2 && r == geo.rows[p] - 1))
++            {
++                int i = 0;
++                while (i < n)
++                {
++                    ssize_t got = readv(fd, iov + i, n - i);
++                    if (got < 0)
++                    {
++                        if (errno == EINTR)
++                            continue;
++                        return false;
++                    }
++                    if (got == 0)
++                    {
++                        sawEof = true;
++                        return false;
++                    }
++                    while (i < n && (size_t)got >= iov[i].iov_len)
++                    {
++                        got -= iov[i].iov_len;
++                        i++;
++                    }
++                    if (i < n && got)
++                    {
++                        iov[i].iov_base = (char*)iov[i].iov_base + got;
++                        iov[i].iov_len -= got;
++                    }
++                }
++                n = 0;
++            }
++        }
++    }
++    return true;
++}
++#endif
++
+ void YUVInput::release()
+ {
+     threadActive = false;
+@@ -164,7 +285,7 @@
+     /* wait for room in the ring buffer */
+     int written = writeCount.get();
+     int read = readCount.get();
+-    while (written - read > QUEUE_SIZE - 2)
++    while (written - read > ringSlots - 2)
+     {
+         read = readCount.waitForChange(read);
+         if (!threadActive)
+@@ -172,7 +293,18 @@
+             return false;
+     }
+     ProfileScopeEvent(frameRead);
+-    if (fread(buf[written % QUEUE_SIZE], framesize, 1, ifs) == 1)
++#if !_WIN32
++    if (directIngest)
++    {
++        if (readFrameDirect(buf[written % ringSlots]))
++        {
++            writeCount.incr();
++            return true;
++        }
++        return false;
++    }
++#endif
++    if (fread(buf[written % ringSlots], framesize, 1, ifs) == 1)
+     {
+         writeCount.incr();
+         return true;
+@@ -183,7 +315,7 @@
+ 
+ bool YUVInput::readPicture(x265_picture& pic)
+ {
+-    int read = readCount.get();
++    int read = zeroCopy ? readCursor : readCount.get();
+     int written = writeCount.get();
+ 
+ #if ENABLE_THREADING
+@@ -206,12 +338,24 @@
+         pic.framesize = framesize;
+         pic.height = height;
+         pic.width = width;
++        if (directIngest)
++        {
++            char* slot = buf[read % ringSlots];
++            for (int p = 0; p < 3; p++)
++            {
++                pic.stride[p] = geo.stride[p];
++                pic.planes[p] = slot + geo.planeOffset[p];
++            }
++        }
++        else
++        {
+         pic.stride[0] = width * pixelbytes * (pic.format == 1 ? 2 : 1);
+         pic.stride[1] = pic.stride[0] >> x265_cli_csps[colorSpace].width[1];
+         pic.stride[2] = pic.stride[0] >> x265_cli_csps[colorSpace].width[2];
+         pic.planes[0] = buf[read % QUEUE_SIZE];
+         pic.planes[1] = (char*)pic.planes[0] + pic.stride[0] * (height * (pic.format == 2 ? 2 : 1));
+         pic.planes[2] = (char*)pic.planes[1] + pic.stride[1] * ((height * (pic.format == 2 ? 2 : 1)) >> x265_cli_csps[colorSpace].height[1]);
++        }
+ #if ENABLE_ALPHA
+         if (alphaAvailable)
+         {
+@@ -219,7 +363,10 @@
+             pic.planes[3] = (char*)pic.planes[2] + pic.stride[2] * (height >> x265_cli_csps[colorSpace].height[2]);
+         }
+ #endif
+-        readCount.incr();
++        if (zeroCopy)
++            readCursor++;
++        else
++            readCount.incr();
+         return true;
+     }
+     else
+--- a/source/input/yuv.h	2026-06-26 15:31:47.468698327 +0100
++++ b/source/input/yuv.h	2026-07-29 16:32:49.820150021 +0100
+@@ -54,25 +54,46 @@
+     ThreadSafeInteger readCount;
+ 
+     ThreadSafeInteger writeCount;
+-    char* buf[QUEUE_SIZE];
++
++    /* zero-copy mode: readPicture() advances readCursor (consumer thread only)
++     * while readCount becomes the release counter, bumped by releaseFrame() */
++    bool zeroCopy;
++
++    /* direct-ingest mode: ring slots are laid out in the encoder's fenc
++     * geometry and file rows are scattered into place with readv() */
++    bool directIngest;
++    bool sawEof;
++    FrameBufGeometry geo;
++
++    int readCursor;
++    int ringSlots;
++    char** buf;
+     FILE *ifs;
+     int guessFrameCount();
+     void threadMain();
+ 
+     bool populateFrameQueue();
+ 
++    bool readFrameDirect(char* slot);
++
+ public:
+ 
+     YUVInput(InputFileInfo& info, bool alpha, int format);
+ 
+     virtual ~YUVInput();
+     void release();
+-    bool isEof() const                            { return ifs && feof(ifs); }
++    bool isEof() const                            { return sawEof || (ifs && feof(ifs)); }
+     bool isFail()                                 { return !(ifs && !ferror(ifs) && threadActive); }
+     void startReader();
+ 
+     bool readPicture(x265_picture&);
+ 
++    bool enableZeroCopy()                         { zeroCopy = true; return true; }
++
++    bool enableDirectIngest(const FrameBufGeometry& g);
++
++    void releaseFrame()                           { readCount.incr(); }
++
+     const char *getName() const                   { return "yuv"; }
+ 
+     int getWidth() const                          { return width; }
+--- a/source/test/pixelharness.cpp	2026-06-26 15:31:47.472698338 +0100
++++ b/source/test/pixelharness.cpp	2026-06-30 12:47:59.917468489 +0100
+@@ -2221,6 +2221,70 @@
+     return true;
+ }
+ 
++bool PixelHarness::check_pelFilterLumaWeak_V(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt)
++{
++    intptr_t srcStep = 64, offset = 1;
++    int32_t tc, maskP, maskQ, maskP1, maskQ1;
++    int j = 0;
++
++    pixel pixel_test_buff1[TEST_CASES][BUFFSIZE];
++    for (int i = 0; i < TEST_CASES; i++)
++        memcpy(pixel_test_buff1[i], pixel_test_buff[i], sizeof(pixel) * BUFFSIZE);
++
++    for (int i = 0; i < ITERS; i++)
++    {
++        tc     = rand() % PIXEL_MAX;
++        maskP  = (rand() % PIXEL_MAX) - 1;
++        maskQ  = (rand() % PIXEL_MAX) - 1;
++        maskP1 = (rand() & 1) ? -1 : 0;
++        maskQ1 = (rand() & 1) ? -1 : 0;
++
++        int index = rand() % 3;
++
++        ref(pixel_test_buff[index] + 4 + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
++        checked(opt, pixel_test_buff1[index] + 4 + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
++
++        if (memcmp(pixel_test_buff[index], pixel_test_buff1[index], sizeof(pixel) * BUFFSIZE))
++            return false;
++
++        reportfail()
++        j += INCR;
++    }
++    return true;
++}
++
++bool PixelHarness::check_pelFilterLumaWeak_H(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt)
++{
++    intptr_t srcStep = 1, offset = 64;
++    int32_t tc, maskP, maskQ, maskP1, maskQ1;
++    int j = 0;
++
++    pixel pixel_test_buff1[TEST_CASES][BUFFSIZE];
++    for (int i = 0; i < TEST_CASES; i++)
++        memcpy(pixel_test_buff1[i], pixel_test_buff[i], sizeof(pixel) * BUFFSIZE);
++
++    for (int i = 0; i < ITERS; i++)
++    {
++        tc     = rand() % PIXEL_MAX;
++        maskP  = (rand() % PIXEL_MAX) - 1;
++        maskQ  = (rand() % PIXEL_MAX) - 1;
++        maskP1 = (rand() & 1) ? -1 : 0;
++        maskQ1 = (rand() & 1) ? -1 : 0;
++
++        int index = rand() % 3;
++
++        ref(pixel_test_buff[index]  + 4 * offset + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
++        checked(opt, pixel_test_buff1[index] + 4 * offset + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
++
++        if (memcmp(pixel_test_buff[index], pixel_test_buff1[index], sizeof(pixel) * BUFFSIZE))
++            return false;
++
++        reportfail()
++        j += INCR;
++    }
++    return true;
++}
++
+ bool PixelHarness::check_integral_initv(integralv_t ref, integralv_t opt)
+ {
+     intptr_t srcStep = 64;
+@@ -3124,6 +3188,24 @@
+         }
+     }
+ 
++    if (opt.pelFilterLumaWeak[0])
++    {
++        if (!check_pelFilterLumaWeak_V(ref.pelFilterLumaWeak[0], opt.pelFilterLumaWeak[0]))
++        {
++            printf("pelFilterLumaWeak Vertical failed!\n");
++            return false;
++        }
++    }
++
++    if (opt.pelFilterLumaWeak[1])
++    {
++        if (!check_pelFilterLumaWeak_H(ref.pelFilterLumaWeak[1], opt.pelFilterLumaWeak[1]))
++        {
++            printf("pelFilterLumaWeak Horizontal failed!\n");
++            return false;
++        }
++    }
++
+     for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)
+     {
+         if (opt.integral_initv[k] && !check_integral_initv(ref.integral_initv[k], opt.integral_initv[k]))
+@@ -3779,6 +3861,28 @@
+         REPORT_SPEEDUP(opt.pelFilterChroma[1], ref.pelFilterChroma[1], pbuf1, 1, STRIDE, tc, maskP, maskQ);
+     }
+ 
++    if (opt.pelFilterLumaWeak[0])
++    {
++        int32_t tc     = (rand() % PIXEL_MAX);
++        int32_t maskP  = (rand() % PIXEL_MAX) - 1;
++        int32_t maskQ  = (rand() % PIXEL_MAX) - 1;
++        int32_t maskP1 = (rand() & 1) ? -1 : 0;
++        int32_t maskQ1 = (rand() & 1) ? -1 : 0;
++        HEADER0("pelFilterLumaWeak_Vertical");
++        REPORT_SPEEDUP(opt.pelFilterLumaWeak[0], ref.pelFilterLumaWeak[0], pbuf1, STRIDE, 1, tc, maskP, maskQ, maskP1, maskQ1);
++    }
++
++    if (opt.pelFilterLumaWeak[1])
++    {
++        int32_t tc     = (rand() % PIXEL_MAX);
++        int32_t maskP  = (rand() % PIXEL_MAX) - 1;
++        int32_t maskQ  = (rand() % PIXEL_MAX) - 1;
++        int32_t maskP1 = (rand() & 1) ? -1 : 0;
++        int32_t maskQ1 = (rand() & 1) ? -1 : 0;
++        HEADER0("pelFilterLumaWeak_Horizontal");
++        REPORT_SPEEDUP(opt.pelFilterLumaWeak[1], ref.pelFilterLumaWeak[1], pbuf1, 1, STRIDE, tc, maskP, maskQ, maskP1, maskQ1);
++    }
++
+     for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)
+     {
+         if (opt.integral_initv[k])
+--- a/source/test/pixelharness.h	2026-06-26 15:31:47.472698338 +0100
++++ b/source/test/pixelharness.h	2026-06-30 12:47:59.921468499 +0100
+@@ -134,6 +134,8 @@
+     bool check_pelFilterLumaStrong_H(pelFilterLumaStrong_t ref, pelFilterLumaStrong_t opt);
+     bool check_pelFilterChroma_V(pelFilterChroma_t ref, pelFilterChroma_t opt);
+     bool check_pelFilterChroma_H(pelFilterChroma_t ref, pelFilterChroma_t opt);
++    bool check_pelFilterLumaWeak_V(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt);
++    bool check_pelFilterLumaWeak_H(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt);
+     bool check_integral_initv(integralv_t ref, integralv_t opt);
+     bool check_integral_inith(integralh_t ref, integralh_t opt);
+     bool check_ssimDist(ssimDistortion_t ref, ssimDistortion_t opt);
+--- a/source/x265cli.cpp	2026-06-26 15:31:47.472698338 +0100
++++ b/source/x265cli.cpp	2026-07-29 16:32:49.824150033 +0100
+@@ -1009,6 +1009,58 @@
+                 general_log(param, input[view]->getName(), X265_LOG_INFO, "%s\n", buf);
+         }
+ 
++        /* Direct ingest: for a plain single encode (one view/layer, no scaler,
++         * no field split, 8-bit, matching csp, bframes 0, and no feature that
++         * reads a previous frame's fenc pixels — frame-dup, temporal filter,
++         * hist scenecut, weightp) re-lay the input ring in the encoder's fenc
++         * geometry so encoder_encode() can alias the slots (bCopyPicToFrame=0)
++         * instead of copying every frame in copyFromPicture(). Must be decided
++         * before startReader() spins up the file thread. frameNumThreads must
++         * be explicit since the ring depth has to cover frames in flight. */
++        if (!isAbrLadderConfig && !enableScaler && param->numViews == 1 &&
++            !param->format && param->numScalableLayers <= 1 && !param->bField &&
++#if ENABLE_ALPHA
++            !param->bEnableAlpha &&
++#endif
++            param->internalBitDepth == 8 && info[0].depth == 8 &&
++            param->internalCsp == info[0].csp &&
++            !param->bframes && param->frameNumThreads > 0 &&
++            !param->bEnableFrameDuplication && !param->bEnableTemporalFilter &&
++            !param->bHistBasedSceneCut &&
++            !param->bEnableWeightedPred && !param->bEnableWeightedBiPred)
++        {
++            uint32_t maxCU = param->maxCUSize;
++            uint32_t stride = ((param->sourceWidth + maxCU - 1) / maxCU) * maxCU;
++            uint32_t maxHeight = ((param->sourceHeight + maxCU - 1) / maxCU) * maxCU;
++            uint32_t lumaMarginX = maxCU + 32, lumaMarginY = maxCU + 16;
++            int hShift = x265_cli_csps[param->internalCsp].width[1];
++            int vShift = x265_cli_csps[param->internalCsp].height[1];
++            uint32_t strideC = (stride >> hShift) + (lumaMarginX << 1);
++            uint32_t chromaMarginY = lumaMarginY >> vShift;
++            stride += lumaMarginX << 1;
++            uint32_t lumaBytes = stride * (maxHeight + (lumaMarginY << 1));
++            uint32_t chromaBytes = strideC * ((maxHeight >> vShift) + (chromaMarginY << 1));
++
++            FrameBufGeometry& g = directGeo;
++            g.slotBytes = lumaBytes + 2 * chromaBytes;
++            g.planeOffset[0] = lumaMarginY * stride + lumaMarginX;
++            g.planeOffset[1] = lumaBytes + chromaMarginY * strideC + lumaMarginX;
++            g.planeOffset[2] = lumaBytes + chromaBytes + chromaMarginY * strideC + lumaMarginX;
++            g.stride[0] = stride;
++            g.stride[1] = g.stride[2] = strideC;
++            g.rows[0] = param->sourceHeight;
++            g.rows[1] = g.rows[2] = param->sourceHeight >> vShift;
++            g.rowBytes[0] = param->sourceWidth;
++            g.rowBytes[1] = g.rowBytes[2] = param->sourceWidth >> hShift;
++            g.slots = param->frameNumThreads + param->lookaheadDepth + 6;
++
++            if (input[0]->enableDirectIngest(g))
++            {
++                inputDirect = true;
++                param->bCopyPicToFrame = 0;
++            }
++        }
++
+         for (int view = 0; view < param->numViews - !!param->format; view++)
+             this->input[view]->startReader();
+ 
+--- a/source/x265cli.h	2026-06-26 15:31:47.472698338 +0100
++++ b/source/x265cli.h	2026-07-29 16:32:49.824150033 +0100
+@@ -435,6 +435,11 @@
+         char** argString;
+         char *stringPool;
+ 
++        /* direct ingest: input reader ring re-laid-out in fenc geometry so the
++         * encoder aliases the slots via bCopyPicToFrame=0 (see PassEncoder) */
++        bool inputDirect;
++        FrameBufGeometry directGeo;
++
+         /* ABR ladder settings */
+         bool isAbrLadderConfig;
+         bool enableScaler;
+@@ -473,6 +478,8 @@
+             startTime = x265_mdate();
+             prevUpdateTime = 0;
+             bDither = false;
++            inputDirect = false;
++            memset(&directGeo, 0, sizeof(directGeo));
+             isAbrLadderConfig = false;
+             enableScaler = false;
+             encName[0] = 0;
