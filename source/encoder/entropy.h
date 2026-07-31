@@ -210,6 +210,11 @@ public:
     /* these functions are only used to estimate the bits when cbf is 0 and will never be called when writing the bistream. */
     inline void codeQtRootCbfZero() { encodeBin(0, m_contextState[OFF_QT_ROOT_CBF_CTX]); }
 
+    /* DM Phase 13: bits for load(this)+resetBits()+codeQtRootCbfZero()+
+     * getNumberOfWrittenBits() computed against this snapshot without the
+     * 160-byte context restore (bit-counting mode only). */
+    inline uint32_t bitsQtRootCbfZero() const { return bitsCodeBin(0, m_contextState[OFF_QT_ROOT_CBF_CTX]); }
+
 private:
 
     /* CABAC private methods */
