@@ -16,6 +16,7 @@ Single-thread, 5 Mbps low-latency (per-phase A/B pairs):
 | + Phase 11 (cbf-gated coeff commit), 1t | additional **−1.4 %** cycles |
 | + Phase 12 (dead search-work cut), 1t | additional **−8.9 %** cycles |
 | + lowres NEON port, 1t | additional **−1.3 %** cycles |
+| + Phase 13 (data-movement audit cuts), 1t | additional **−2.8 %** cycles (−1.1 % at 4t) |
 | + optional BOLT layer (see `bolt-artifacts/`) | additional **−1.4 %** cycles |
 
 ### 4-thread realtime progression (measured stage-by-stage)
@@ -122,23 +123,35 @@ further cuts taken.
 
 The end goal of the later phases: every cycle x265 spends over x264 should be
 attributable to *search work* (more intra modes, deeper partition tree, more
-merge candidates), not *structural flab* (copy/zero plumbing). Measured on the
-same clip and settings-equivalent configs (flat perf profile, pure copy/zero
-primitives only):
+merge candidates), not *structural flab* (copy/zero plumbing).
 
-| | data-movement cycles |
-|---|---|
-| x264 (reference) | 8.5 G |
-| x265, before Phase 8 | 19.2 G |
-| x265, after Phase 10 | 9.1 G |
-| x265, after Phase 11 | **7.8 G** |
+An earlier revision of this README claimed parity ("7.8 G vs 8.5 G") by
+comparing an x265 number that *excluded* ingest (removed by Phases 9/10)
+against an x264 total that *included* its ~4.8 G of ingest copies, and by
+counting only named copy primitives — missing copy loops living inside
+ordinary functions on both sides. That comparison was not legitimate and is
+withdrawn. The honest accounting (ingest excluded on both sides, hidden
+copy/fill loops included, callgraph-attributed; see
+`docs/refactor/STAGE-COST-AUDIT.md`) is:
 
-**Target met and exceeded**: x265 now moves *less* empty data than x264 on
-this workload. The remaining copies are matched by x264 equivalents
-(full-pel MC block fetch, entropy context save/restore, MB/CU commit).
-Frame ingest is also *cheaper* than x264's: zero user-space copies from disk
-to encode (x264 spends ~2.9 G in `plane_copy`), because `readv()` scatters
-file rows directly into encoder-geometry buffers (Phase 10).
+| movement class, 1t | x265 (pre-P13) | x265 (post-P13) | x264 |
+|---|---|---|---|
+| frame ingest (excluded from totals) | ~0 | ~0 | 4.9 G |
+| pixel movement (MC fetch, fenc staging, scratch, commit, border) | ~8.5 G | **~6.5 G** | ~6.0 G |
+| metadata + context movement (CU init/commit, entropy ctx, vs MB cache load/save) | ~12.0 G | **~7.7 G** | ~2.0 G |
+
+**Pixel movement is at parity.** The remaining excess is *metadata*
+movement: HEVC quad-tree per-part arrays (init, per-candidate re-init,
+commit) and CABAC context save/restore have no cheap H.264 analog — x264's
+fixed MB layout and CAVLC let it keep that class at ~2 G. Phase 13 cut the
+avoidable half (write-only distortion traffic, redundant per-CTU lambda
+recomputation, one of four 160-byte context restores per CU, per-row libc
+calls in border extension); the rest is the price of the CTU/CABAC
+architecture, itemized and justified stage-by-stage in the audit memo.
+
+Frame ingest remains *cheaper* than x264's: zero user-space copies from
+disk to encode, because `readv()` scatters file rows directly into
+encoder-geometry buffers (Phase 10).
 
 The refactor also uncovered and fixed three upstream stride bugs in
 `getBestIntraModeChroma`, `checkIntraInInter` and `cbf0Dist` chroma paths.
@@ -165,6 +178,7 @@ The refactor also uncovered and fixed three upstream stride bugs in
 | `eb05229` | Phase 11 — skip cbf-0 coefficient planes at `CUData::copyToPic` commit (768B of the ~1.5KB per-commit traffic, paid even for skip CUs; coeffs are only ever read under cbf gates) |
 | `c426372` | Phase 12 — cut dead search work: `topSkipMinDepth` early-out at 16x16 CTUs; per-mode intra generation under fast-intra (sa8d is transpose-invariant, decisions identical) |
 | `f0618f1` | aarch64 NEON port of `frame_init_lowres_core` (lookahead lowres planes; `vrhaddq_u8` reproduces the C filter bit-exactly) |
+| `186a81e` | Phase 13 — data-movement audit cuts: border-extension NEON splat, write-only `m_distortion` gating, closed-form cbf0 signal bits, `setLambdaFromQP` memo |
 
 See `docs/refactor/MEMORY-REFACTOR-PLAN.md` for the plan-of-record; individual investigation memos capture the reasoning at each fork.
 
