@@ -668,7 +668,7 @@
  };
  
 --- a/source/common/aarch64/pixel-prim.cpp	2026-06-26 15:31:47.452698281 +0100
-+++ b/source/common/aarch64/pixel-prim.cpp	2026-07-01 11:17:20.249291486 +0100
++++ b/source/common/aarch64/pixel-prim.cpp	2026-07-31 12:05:04.117490945 +0100
 @@ -1482,7 +1482,8 @@
  }
  
@@ -690,6 +690,66 @@
 +        pred     += predStride;
 +        residual += resiStride;
      }
+ }
+ 
+@@ -1712,6 +1713,48 @@
+     return sum + vaddvq_s32(vsum);
+ }
+ 
++#if !(HIGH_BIT_DEPTH)
++/* Generate the four half-pel-shifted half-resolution lowres planes.
++ * FILTER(a,b,c,d) in the C version is exactly rhadd(rhadd(a,b), rhadd(c,d)),
++ * so vrhaddq_u8 reproduces it bit-exactly. */
++void frame_init_lowres_core_neon(const pixel* src0, pixel* dst0, pixel* dsth, pixel* dstv, pixel* dstc,
++                                 intptr_t src_stride, intptr_t dst_stride, int width, int height)
++{
++    for (int y = 0; y < height; y++)
++    {
++        const pixel* src1 = src0 + src_stride;
++        const pixel* src2 = src1 + src_stride;
++        int x = 0;
++        for (; x + 16 <= width; x += 16)
++        {
++            uint8x16x2_t r0  = vld2q_u8(src0 + 2 * x);
++            uint8x16x2_t r1  = vld2q_u8(src1 + 2 * x);
++            uint8x16x2_t r2  = vld2q_u8(src2 + 2 * x);
++            uint8x16x2_t r0s = vld2q_u8(src0 + 2 * x + 2);
++            uint8x16x2_t r1s = vld2q_u8(src1 + 2 * x + 2);
++            uint8x16x2_t r2s = vld2q_u8(src2 + 2 * x + 2);
++            vst1q_u8(dst0 + x, vrhaddq_u8(vrhaddq_u8(r0.val[0], r1.val[0]), vrhaddq_u8(r0.val[1], r1.val[1])));
++            vst1q_u8(dsth + x, vrhaddq_u8(vrhaddq_u8(r0.val[1], r1.val[1]), vrhaddq_u8(r0s.val[0], r1s.val[0])));
++            vst1q_u8(dstv + x, vrhaddq_u8(vrhaddq_u8(r1.val[0], r2.val[0]), vrhaddq_u8(r1.val[1], r2.val[1])));
++            vst1q_u8(dstc + x, vrhaddq_u8(vrhaddq_u8(r1.val[1], r2.val[1]), vrhaddq_u8(r1s.val[0], r2s.val[0])));
++        }
++        for (; x < width; x++)
++        {
++#define FILTER(a, b, c, d) ((((a + b + 1) >> 1) + ((c + d + 1) >> 1) + 1) >> 1)
++            dst0[x] = FILTER(src0[2 * x], src1[2 * x], src0[2 * x + 1], src1[2 * x + 1]);
++            dsth[x] = FILTER(src0[2 * x + 1], src1[2 * x + 1], src0[2 * x + 2], src1[2 * x + 2]);
++            dstv[x] = FILTER(src1[2 * x], src2[2 * x], src1[2 * x + 1], src2[2 * x + 1]);
++            dstc[x] = FILTER(src1[2 * x + 1], src2[2 * x + 1], src1[2 * x + 2], src2[2 * x + 2]);
++#undef FILTER
++        }
++        src0 += src_stride * 2;
++        dst0 += dst_stride;
++        dsth += dst_stride;
++        dstv += dst_stride;
++        dstc += dst_stride;
++    }
++}
++#endif // !(HIGH_BIT_DEPTH)
+ 
+ };
+ 
+@@ -2069,6 +2112,10 @@
+     p.chroma[X265_CSP_I422].cu[BLOCK_32x32].sa8d = sa8d16<16, 32>;
+     p.chroma[X265_CSP_I422].cu[BLOCK_64x64].sa8d = sa8d16<32, 64>;
+ 
++#if !(HIGH_BIT_DEPTH)
++    p.frameInitLowres = frame_init_lowres_core_neon;
++    p.frameInitLowerRes = frame_init_lowres_core_neon;
++#endif
+ 
  }
  
 --- a/source/common/aarch64/pixel-util.S	2026-06-26 15:31:47.452698281 +0100
