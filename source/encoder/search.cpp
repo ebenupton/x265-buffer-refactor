@@ -5106,14 +5106,21 @@ void Search::encodeResAndCalcRdSkipCU(Mode& interMode)
         interMode.distortion += interMode.chromaDistortion;
     }
     cu.m_distortion[0] = interMode.distortion;
-    m_entropyCoder.load(m_rqt[depth].cur);
-    m_entropyCoder.resetBits();
+    /* DM Phase 17 (2026-07-31): code the skip candidate's few signal bins
+     * directly into interMode.contexts instead of the old
+     * load(cur) -> code on m_entropyCoder -> store(contexts) round-trip,
+     * saving one full 166-byte context copy per skip candidate.  The final
+     * contexts state and every bit count are identical; m_entropyCoder is
+     * simply left stale, which is safe because every later user loads a
+     * snapshot before coding. */
+    interMode.contexts.load(m_rqt[depth].cur);
+    interMode.contexts.resetBits();
     if (m_slice->m_pps->bTransquantBypassEnabled)
-        m_entropyCoder.codeCUTransquantBypassFlag(cu.m_tqBypass[0]);
-    m_entropyCoder.codeSkipFlag(cu, 0);
-    int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
-    m_entropyCoder.codeMergeIndex(cu, 0);
-    interMode.mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
+        interMode.contexts.codeCUTransquantBypassFlag(cu.m_tqBypass[0]);
+    interMode.contexts.codeSkipFlag(cu, 0);
+    int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
+    interMode.contexts.codeMergeIndex(cu, 0);
+    interMode.mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
     interMode.coeffBits = 0;
     interMode.totalBits = interMode.mvBits + skipFlagBits;
     if (m_rdCost.m_psyRd)
@@ -5123,7 +5130,7 @@ void Search::encodeResAndCalcRdSkipCU(Mode& interMode)
 
     interMode.resEnergy = primitives.cu[part].sse_pp(fencYuv->m_buf[0], fencYuv->m_size, predYuv->m_buf[0], predYuv->m_size);
     updateModeCost(interMode);
-    m_entropyCoder.store(interMode.contexts);
+    /* DM Phase 17: interMode.contexts already holds the post-coding state */
 }
 
 /* encode residual and calculate rate-distortion for a CU block.
@@ -5222,12 +5229,16 @@ void Search::encodeResAndCalcRdInterCU(Mode& interMode, const CUGeom& cuGeom)
     if (cu.getQtRootCbf(0))
         saveResidualQTData(cu, *resiYuv, 0, 0);
 
-    /* calculate signal bits for inter/merge/skip coded CU */
-    m_entropyCoder.load(m_rqt[depth].cur);
-
-    m_entropyCoder.resetBits();
+    /* calculate signal bits for inter/merge/skip coded CU.
+     * DM Phase 17 (2026-07-31): coded directly into interMode.contexts
+     * (seeded from the rqt snapshot) instead of the old load -> code on
+     * m_entropyCoder -> store round-trip, saving one 166-byte context copy
+     * per inter candidate.  States and bit counts are identical;
+     * m_entropyCoder is left stale, and every later user loads first. */
+    interMode.contexts.load(m_rqt[depth].cur);
+    interMode.contexts.resetBits();
     if (m_slice->m_pps->bTransquantBypassEnabled)
-        m_entropyCoder.codeCUTransquantBypassFlag(tqBypass);
+        interMode.contexts.codeCUTransquantBypassFlag(tqBypass);
 
     uint32_t coeffBits, bits, mvBits;
     if (cu.m_mergeFlag[0] && cu.m_partSize[0] == SIZE_2Nx2N && !cu.getQtRootCbf(0))
@@ -5236,29 +5247,27 @@ void Search::encodeResAndCalcRdInterCU(Mode& interMode, const CUGeom& cuGeom)
 
         /* Merge/Skip */
         coeffBits = mvBits = 0;
-        m_entropyCoder.codeSkipFlag(cu, 0);
-        int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
-        m_entropyCoder.codeMergeIndex(cu, 0);
-        mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
+        interMode.contexts.codeSkipFlag(cu, 0);
+        int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
+        interMode.contexts.codeMergeIndex(cu, 0);
+        mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
         bits = mvBits + skipFlagBits;
     }
     else
     {
-        m_entropyCoder.codeSkipFlag(cu, 0);
-        int skipFlagBits = m_entropyCoder.getNumberOfWrittenBits();
-        m_entropyCoder.codePredMode(cu.m_predMode[0]);
-        m_entropyCoder.codePartSize(cu, 0, cuGeom.depth);
-        m_entropyCoder.codePredInfo(cu, 0);
-        mvBits = m_entropyCoder.getNumberOfWrittenBits() - skipFlagBits;
+        interMode.contexts.codeSkipFlag(cu, 0);
+        int skipFlagBits = interMode.contexts.getNumberOfWrittenBits();
+        interMode.contexts.codePredMode(cu.m_predMode[0]);
+        interMode.contexts.codePartSize(cu, 0, cuGeom.depth);
+        interMode.contexts.codePredInfo(cu, 0);
+        mvBits = interMode.contexts.getNumberOfWrittenBits() - skipFlagBits;
 
         bool bCodeDQP = m_slice->m_pps->bUseDQP;
-        m_entropyCoder.codeCoeff(cu, 0, bCodeDQP, tuDepthRange);
-        bits = m_entropyCoder.getNumberOfWrittenBits();
+        interMode.contexts.codeCoeff(cu, 0, bCodeDQP, tuDepthRange);
+        bits = interMode.contexts.getNumberOfWrittenBits();
 
         coeffBits = bits - mvBits - skipFlagBits;
     }
-
-    m_entropyCoder.store(interMode.contexts);
 
     /* Phase 2 pointer-swap: on the cbf=0 branch reconYuv used to deep-copy
      * predYuv's content byte-for-byte. Instead move the buffer pointer with
