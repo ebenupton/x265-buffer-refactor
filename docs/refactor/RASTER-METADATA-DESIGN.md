@@ -1,7 +1,26 @@
 # Design study: raster-order committed metadata (the post-sweep frontier)
 
-**Status: design only, not implemented.** Written 2026-08-01 at the close of
-the Phase 13–17 sweep, from that sweep's measurements.
+**Status: Design A implemented, measured, and REFUTED (2026-08-01,
+`phase18d-partrec-designA-rejected.patch`).** Bit-exact (gate PASS), and
+decisively slower: **+2.2 % at 1t, 4/4 pairs**. The post-mortem numbers:
+`fillPartRecs` cost 1.72 % (2.9 G — two 192-byte cold-RFO fills per CTU),
+while the three converted consumer families saved only ~0.6 G
+(`getInterNeighbourMV` 0.67 → 0.42 %, merge 0.45 → 0.39 %,
+`getCtxSkipFlag` up slightly from gate checks). The design's "6–8 G
+reachable" figure was wrong by an order of magnitude: the replaced reads
+are ~15-cycle L2 hits, so a record read saves ~11 cycles per probe — a
+~0.6 G ceiling that no commit-time fill can undercut. Together with the
+three BS-cache rejections and the AMVP fixed-position result, this closes
+the entire commit-time mirror/sidecar design space at this working-set
+scale. Design B (full z→raster migration) is also argued down by the same
+data: at 1t there is no miss latency to reclaim and the z-scan arithmetic
+is free; only the 4t C2C channel remains, where the fill experiments
+showed record traffic makes things worse, not better. The one survivor of
+this family remains Phase 16's TMVP sidecar, whose reads are genuinely
+DRAM-cold (cross-frame) and whose compression is 16:1.
+
+The remainder of this memo is preserved as written, as the record of the
+design that was tested.
 
 ## Why this is the frontier
 
