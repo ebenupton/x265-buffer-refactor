@@ -124,3 +124,19 @@ now JUSTIFIED with mechanisms attached. No phase of this campaign
 clears the risk-adjusted bar; the encoder-side frontier moves to
 quality-trading changes (out of bit-exact scope) or upstream-scale WPP
 entropy-chain redesign (the 7% C2C tax, L3 study).
+
+## STANDING GOAL (Eben, 2026-08-02): full 4-core utilization
+
+Directive: all four cores pegged at 100%, and "do whatever it takes to
+generate enough parallelism to achieve that." Current state: ft4+wpp =
+~3.5 CPUs busy (utilization ceiling, not cycles); ft1 = 2.88. The known
+limiters, in order: the 2-CTU WPP entropy-context chain (row N+1 waits
+on row N every 2 CTUs), frame-boundary ramp/drain, and lookahead/frame
+master serialization. Candidate directions when this is picked up:
+finer/other task shapes (row pairs, entropy decoupled from
+reconstruction), speculative row start past the entropy dependency,
+oversubscription (pools 5+ - the ft5 wildcard column in the threads
+matrix is a first data point), lookahead depth/threading, and slices
+(quality-trading, last resort). Note this abandons the bit-exact frame
+where it must - utilization is the goal, output equivalence the
+constraint to negotiate per change.
