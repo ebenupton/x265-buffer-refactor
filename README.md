@@ -39,6 +39,8 @@ session (4–6 runs per stage, thermal gaps, active cooling; cycles are
 | + Phase 9 (zero-copy CLI ingest) | 243.9 G | 31.3 |
 | + Phase 10 (direct `readv()` ingest) | 231.0 G | 33.1 |
 | + Phase 11 (cbf-gated coeff commit) | **223.7 G** | **34.0** |
+| + Phase 12 + NEON ports (see below) | 206.7 G | ~35.5 |
+| + Phases 13–17 (DM sweep, 2026-07-31/08-01) | −2.9 % vs pre-13 same-session | **35.9** |
 
 Net 4t: **−10.8 % cycles, 30.5 → 34.0 fps (1.13× realtime)**. The 4t win is
 carried by the ingest/commit phases (9–11) plus the deblock port; the
@@ -96,6 +98,13 @@ operating point** for this tree:
 Equal quality, 20 % less bitrate, −12 % cycles, +15 % fps. The deltas hold on
 longer content: on a 90 s cut the combo config gains +0.90 dB at 5 Mbps and
 the ~3.9 Mbps point again matches base-config quality.
+
+Phases 13–17 validation (2026-08-01): bit-exact vs the pre-Phase-13 tree on
+the 90 s clip at all three gate configs, and bit-exact on the recommended
+config at 1t and 4t. On the recommended config the sweep is worth
+**−3.5 % cycles at 1t and −3.1 % at 4t** (interleaved pairs) — larger than
+on the base config, so the 4 Mbps reference point picks up roughly another
++1 fps.
 
 ### vs 10 Mbps H.264
 
