@@ -140,3 +140,19 @@ Bottom line: the multi-thread structure is already at a measured
 locality/utilization optimum for this L3; the 7%-IPC frame-pipelining
 tax is structural C2C, and the two latency-hiding levers above are the
 only credible attacks left on it.
+
+## C2C latency levers: both measured neutral (2026-08-01 late)
+
+- Consumer PRFM prefetch of collocated ref0 window 2 CTUs ahead
+  (ref-prefetch-neutral.patch): wall/IPC/cycles unchanged, 3 pairs. The
+  A76 HW prefetcher already covers the row-sequential ref pattern.
+- Producer DC CVAC of completed recon rows before m_reconRowFlag publish
+  (recon-cvac-neutral.patch; EL0 dc cvac verified allowed): -0.16%
+  cycles, pairs mixed, wall flat. DSU dirty-line forwarding is already
+  ~as cheap as clean; the added writeback eats the snoop saving.
+
+With the affinity wash this closes all three software attacks on the
+frame-pipelining IPC tax: it is intrinsic DSU C2C transfer cost. The
+remaining ~12G/7% is reachable only by encoding with fewer frames in
+flight (ft1/ft3 trade-offs above) or by making WPP-only utilization
+better (entropy-chain granularity - an upstream-scale redesign).
