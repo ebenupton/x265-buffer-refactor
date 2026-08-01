@@ -91,3 +91,36 @@ Consequences for the campaign:
   commit; the shrinkable part is only the bytes whose lines would not
   otherwise be touched (A5 census must count LINES, not bytes).
 - A2 remains the payload. A3 unassessed.
+
+## Campaign conclusion: JUSTIFIED (2026-08-02 early)
+
+The A2/A3 censuses close the campaign without surgery:
+
+- **A2**: checkMerge2Nx2N_rd0_4's candidate loop already writes only ~6
+  part-0 scalars per candidate and selects by std::swap of Mode
+  POINTERS - no copies. The dual initSubCU + duplicate broadcasts for
+  the skip/merge pair are the only redundancy, worth ~0.2-0.3% against
+  the riskiest restructure in the encoder (temp/best swap dance
+  interleaved with entropy stores). Ceiling does not clear the bar.
+- **A3**: Entropy::copyFrom is a ~220 B memcpy of m_contextState[160] +
+  live SBAC state, ~4 calls/CTU, ~25 cycles each - already at the
+  memcpy floor. Dirty-span tracking cannot pay: at rd1 residual coding
+  touches most of the context array, and the arithmetic state must
+  always be copied. Ceiling ~0.2% with correctness risk.
+- **A5**: subsumed - the Design A reader census already established
+  that entropy encodeCU reads most committed fields; the cold-RFO
+  share (A4 physics) dominates what field-shrinking could touch.
+
+**Bottom line: the x264-style alias gap in the mode-decision churn
+family was already closed by earlier phases** (initSubCU template
+replay, initCTU bNeedPartInit gating, Phase 17 direct context bits).
+The residual ~3.8% decomposes as: compulsory first-touch RFO on
+per-frame CU state (initCTU, part of copyToPic), the required winner
+commit, and small memcpys at their floor. The 2019-vintage x264
+comparison (4.8G vs 10.8G) predates those phases; the remaining gap is
+commit-side cold-write traffic x264 also pays, times HEVC's finer
+metadata granularity. Per project ethos: flab killed earlier, remainder
+now JUSTIFIED with mechanisms attached. No phase of this campaign
+clears the risk-adjusted bar; the encoder-side frontier moves to
+quality-trading changes (out of bit-exact scope) or upstream-scale WPP
+entropy-chain redesign (the 7% C2C tax, L3 study).
