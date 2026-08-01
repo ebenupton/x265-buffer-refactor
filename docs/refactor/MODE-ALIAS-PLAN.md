@@ -140,3 +140,13 @@ matrix is a first data point), lookahead depth/threading, and slices
 (quality-trading, last resort). Note this abandons the bit-exact frame
 where it must - utilization is the goal, output equivalence the
 constraint to negotiate per change.
+
+### Oversubscription data point (2026-08-02, per Eben)
+
+ft4 + pools {4,5,6} on bbb, final PGO+BOLT build, 3 interleaved pairs:
+pools5 = +1.1% cycles, -0.7% IPC, wall worse 3/3; pools6 worse again;
+CPUs-busy UNCHANGED (3.62 -> 3.63 -> 3.65). Extra workers find nothing
+legal to run when the wave compresses - stalls are dependency-shaped,
+not scheduler-shaped. Closes the "more executors" door; parallelism
+must be generated structurally (entropy decoupling first).
+(Side note: refreshed build best = 42.6-43.1 fps bbb 30s 4t.)
