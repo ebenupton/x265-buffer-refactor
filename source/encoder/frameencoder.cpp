@@ -39,6 +39,18 @@
 #include <iostream>
 
 namespace X265_NS {
+
+/* Entropy-decoupling probe E1a: runtime switch, one binary for A/B. */
+static bool X265_DEFER_ENTROPY_ENABLED()
+{
+    static int v = -1;
+    if (v < 0)
+    {
+        const char* e = getenv("X265_DEFER_ENTROPY");
+        v = (e && *e == '1') ? 1 : 0;
+    }
+    return v == 1;
+}
 void weightAnalyse(Slice& slice, Frame& frame, x265_param& param);
 
 FrameEncoder::FrameEncoder()
@@ -736,13 +748,21 @@ void FrameEncoder::compressFrame(int layer)
 
     uint32_t numSubstreams = m_param->bEnableWavefront ? slice->m_sps->numCuInHeight : m_param->maxSlices;
     X265_CHECK(m_param->bEnableWavefront || (m_param->maxSlices == 1), "Multiple slices without WPP unsupport now!");
+    /* Entropy-decoupling probe E1a (2026-08-02): X265_DEFER_ENTROPY=1 makes
+     * the no-SAO path behave like the SAO path - the compression wave's
+     * rowGoOnCoder runs with a NULL bitstream (context updates only, no
+     * arithmetic output; counting mode's context transitions are identical
+     * to real coding) and encodeSlice() regenerates the real substream bits
+     * from committed CUData afterwards.  Bit-exact by construction if the
+     * SAO deferred path is sound at no-SAO; the gate verifies. */
+    const bool bDeferEntropy = X265_DEFER_ENTROPY_ENABLED();
     if (!m_outStreams)
     {
         m_outStreams = new Bitstream[numSubstreams];
         if (!m_param->bEnableWavefront)
             m_backupStreams = new Bitstream[numSubstreams];
         m_substreamSizes = X265_MALLOC(uint32_t, numSubstreams);
-        if (!slice->m_bUseSao)
+        if (!slice->m_bUseSao && !bDeferEntropy)
         {
             for (uint32_t i = 0; i < numSubstreams; i++)
                 m_rows[i].rowGoOnCoder.setBitstream(&m_outStreams[i]);
@@ -753,7 +773,7 @@ void FrameEncoder::compressFrame(int layer)
         for (uint32_t i = 0; i < numSubstreams; i++)
         {
             m_outStreams[i].resetBits();
-            if (!slice->m_bUseSao)
+            if (!slice->m_bUseSao && !bDeferEntropy)
                 m_rows[i].rowGoOnCoder.setBitstream(&m_outStreams[i]);
             else
                 m_rows[i].rowGoOnCoder.setBitstream(NULL);
@@ -1162,8 +1182,9 @@ void FrameEncoder::compressFrame(int layer)
     m_entropyCoder.load(m_initSliceContext);
     m_entropyCoder.setBitstream(&m_bs);
 
-    // finish encode of each CTU row, only required when SAO is enabled
-    if (slice->m_bUseSao)
+    // finish encode of each CTU row; required when SAO is enabled, or when
+    // the E1a probe deferred substream coding out of the compression wave
+    if (slice->m_bUseSao || X265_DEFER_ENTROPY_ENABLED())
         encodeSlice(0, layer);
 
     m_entropyCoder.setBitstream(&m_bs);
@@ -2062,7 +2083,8 @@ void FrameEncoder::processRowEncoder(int intRow, ThreadLocalData& tld, int layer
 
     /* flush row bitstream (if WPP and no SAO) or flush frame if no WPP and no SAO */
     /* end_of_sub_stream_one_bit / end_of_slice_segment_flag */
-       if (!slice->m_bUseSao && (m_param->bEnableWavefront || bLastRowInSlice))
+       if (!slice->m_bUseSao && !X265_DEFER_ENTROPY_ENABLED() &&
+           (m_param->bEnableWavefront || bLastRowInSlice))
                rowCoder.finishSlice();
 
 
