@@ -154,7 +154,13 @@ typedef void (*dct_t)(const int16_t* src, int16_t* dst, intptr_t srcStride);
 typedef void (*idct_t)(const int16_t* src, int16_t* dst, intptr_t dstStride);
 typedef void (*denoiseDct_t)(int16_t* dctCoef, uint32_t* resSum, const uint16_t* offset, int numCoeff);
 
-typedef void (*calcresidual_t)(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride);
+/* Memory-refactor 2026-07-01: calcresidual now takes THREE strides. Previously
+ * shared one stride across fenc/pred/residual, forcing all three buffers to
+ * have identical strides — broke any refactor (e.g. fencYuv-as-view) that gave
+ * fenc a different stride. Valgrind found this via out-of-bounds ShortYuv
+ * writes from getResidual16_neon. */
+typedef void (*calcresidual_t)(const pixel* fenc, const pixel* pred, int16_t* residual,
+                               intptr_t fencStride, intptr_t predStride, intptr_t resiStride);
 typedef void (*transpose_t)(pixel* dst, const pixel* src, intptr_t stride);
 typedef uint32_t (*quant_t)(const int16_t* coef, const int32_t* quantCoeff, int32_t* deltaU, int16_t* qCoef, int qBits, int add, int numCoeff);
 typedef uint32_t (*nquant_t)(const int16_t* coef, const int32_t* quantCoeff, int16_t* qCoef, int qBits, int add, int numCoeff);
@@ -223,6 +229,10 @@ typedef uint32_t (*costC1C2Flag_t)(uint16_t *absCoeff, intptr_t numC1Flag, uint8
 
 typedef void (*pelFilterLumaStrong_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tcP, int32_t tcQ);
 typedef void (*pelFilterChroma_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc, int32_t maskP, int32_t maskQ);
+/* Weak luma deblock primitive — added 2026-06-26 alongside aarch64 NEON port.
+ * Replaces the inline pelFilterLuma in common/deblock.cpp. C fallback is
+ * registered in common/loopfilter.cpp::setupLoopFilterPrimitives_c. */
+typedef void (*pelFilterLumaWeak_t)(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc, int32_t maskP, int32_t maskQ, int32_t maskP1, int32_t maskQ1);
 
 typedef void (*integralv_t)(uint32_t *sum, intptr_t stride);
 typedef void (*integralh_t)(uint32_t *sum, pixel *pix, intptr_t stride);
@@ -381,6 +391,7 @@ struct EncoderPrimitives
 
     pelFilterLumaStrong_t pelFilterLumaStrong[2]; // EDGE_VER = 0, EDGE_HOR = 1
     pelFilterChroma_t     pelFilterChroma[2];     // EDGE_VER = 0, EDGE_HOR = 1
+    pelFilterLumaWeak_t   pelFilterLumaWeak[2];   // EDGE_VER = 0, EDGE_HOR = 1
 
     integralv_t            integral_initv[NUM_INTEGRAL_SIZE];
     integralh_t            integral_inith[NUM_INTEGRAL_SIZE];

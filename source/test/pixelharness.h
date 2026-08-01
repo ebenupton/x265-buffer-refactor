@@ -135,6 +135,8 @@ protected:
     bool check_pelFilterLumaStrong_H(pelFilterLumaStrong_t ref, pelFilterLumaStrong_t opt);
     bool check_pelFilterChroma_V(pelFilterChroma_t ref, pelFilterChroma_t opt);
     bool check_pelFilterChroma_H(pelFilterChroma_t ref, pelFilterChroma_t opt);
+    bool check_pelFilterLumaWeak_V(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt);
+    bool check_pelFilterLumaWeak_H(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt);
     bool check_integral_initv(integralv_t ref, integralv_t opt);
     bool check_integral_inith(integralh_t ref, integralh_t opt);
     bool check_ssimDist(ssimDistortion_t ref, ssimDistortion_t opt);

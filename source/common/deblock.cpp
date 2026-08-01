@@ -409,7 +409,7 @@ void Deblock::edgeFilterLuma(const CUData* cuQ, uint32_t absPartIdx, uint32_t de
             int32_t maskP1 = (dp < sideThreshold ? -1 : 0);
             int32_t maskQ1 = (dq < sideThreshold ? -1 : 0);
 
-            pelFilterLuma(src + unitOffset, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+            primitives.pelFilterLumaWeak[dir](src + unitOffset, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
         }
     }
 }

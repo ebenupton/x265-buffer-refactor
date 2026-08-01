@@ -1647,7 +1647,8 @@ uint64_t pixel_var_neon(const uint8_t *pix, intptr_t i_stride)
 #endif // HIGH_BIT_DEPTH
 
 template<int blockSize>
-void getResidual_neon(const pixel *fenc, const pixel *pred, int16_t *residual, intptr_t stride)
+void getResidual_neon(const pixel *fenc, const pixel *pred, int16_t *residual,
+                      intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
 {
     for (int y = 0; y < blockSize; y++)
     {
@@ -1669,9 +1670,9 @@ void getResidual_neon(const pixel *fenc, const pixel *pred, int16_t *residual, i
         {
             residual[x] = static_cast<int16_t>(fenc[x]) - static_cast<int16_t>(pred[x]);
         }
-        fenc += stride;
-        residual += stride;
-        pred += stride;
+        fenc     += fencStride;
+        pred     += predStride;
+        residual += resiStride;
     }
 }
 

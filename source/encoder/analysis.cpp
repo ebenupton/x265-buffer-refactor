@@ -124,7 +124,11 @@ bool Analysis::create(ThreadLocalData *tld)
     {
         ModeDepth &md = m_modeDepth[depth];
         ok &= md.cuMemPool.create(depth, csp, MAX_PRED_TYPES, *m_param);
-        ok &= md.fencYuv.create(cuSize, csp);
+        /* Phase 1: depth-0 fencYuv is a view into the picture buffer. */
+        if (depth == 0)
+            ok &= md.fencYuv.createView(cuSize, csp);
+        else
+            ok &= md.fencYuv.create(cuSize, csp);
         if (ok)
         {
             for (int j = 0; j < MAX_PRED_TYPES; j++)
@@ -321,7 +325,8 @@ Mode& Analysis::compressCTU(CUData& ctu, Frame& frame, const CUGeom& cuGeom, con
 
     m_rqt[0].cur.load(initialContext);
     ctu.m_meanQP = initialContext.m_meanQP;
-    m_modeDepth[0].fencYuv.copyFromPicYuv(*m_frame->m_fencPic, ctu.m_cuAddr, 0);
+    /* Phase 1: view fenc directly into the picture buffer. */
+    m_modeDepth[0].fencYuv.setView(*m_frame->m_fencPic, ctu.m_cuAddr, 0);
 
     if (m_param->bSsimRd)
         calculateNormFactor(ctu, qp);
@@ -2033,11 +2038,20 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                             cu.getInterTUQtDepthRange(tuDepthRange, 0);
                             m_rqt[cuGeom.depth].tmpResiYuv.subtract(*md.bestMode->fencYuv, md.bestMode->predYuv, cuGeom.log2CUSize, m_frame->m_fencPic->m_picCsp);
                             residualTransformQuantInter(*md.bestMode, cuGeom, 0, 0, tuDepthRange);
+                            /* Phase 3 for cbf=1 (addClip writes reconPic directly
+                             * via view; CU-commit copyToPicYuv becomes a no-op).
+                             * cbf=0 stays with the Phase 2 pointer-swap — under
+                             * multi-thread contention (measured 4t rt on Pi 5),
+                             * the zero-copy adoptFrom beats view+copy by ~0.5s
+                             * per 30s encode; single-thread it's a wash. */
                             if (cu.getQtRootCbf(0))
+                            {
+                                md.bestMode->reconYuv.setReconView(reconPic, cu.m_cuAddr, cuGeom.absPartIdx);
                                 md.bestMode->reconYuv.addClip(md.bestMode->predYuv, m_rqt[cuGeom.depth].tmpResiYuv, cu.m_log2CUSize[0], m_frame->m_fencPic->m_picCsp);
+                            }
                             else
                             {
-                                md.bestMode->reconYuv.copyFromYuv(md.bestMode->predYuv);
+                                md.bestMode->reconYuv.adoptFrom(md.bestMode->predYuv);
                                 if (cu.m_mergeFlag[0] && cu.m_partSize[0] == SIZE_2Nx2N)
                                     cu.setPredModeSubParts(MODE_SKIP);
                             }
@@ -2055,13 +2069,20 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                             uint32_t tuDepthRange[2];
                             cu.getIntraTUQtDepthRange(tuDepthRange, 0);
 
+                            /* Phase 3: residualTransformQuant{Intra,QTIntraChroma} already
+                             * write directly to reconPic via picReconY / picReconC pointers.
+                             * Point reconYuv into reconPic BEFORE the write so downstream
+                             * reads see the picture pixels and the CU-commit
+                             * copyToPicYuv becomes a no-op (kills the old redundant
+                             * copyFromPicYuv/copyToPicYuv round-trip). */
+                            md.bestMode->reconYuv.setReconView(reconPic, cu.m_cuAddr, cuGeom.absPartIdx);
+
                             residualTransformQuantIntra(*md.bestMode, cuGeom, 0, 0, tuDepthRange);
                             if (m_csp != X265_CSP_I400)
                             {
                                 getBestIntraModeChroma(*md.bestMode, cuGeom);
                                 residualQTIntraChroma(*md.bestMode, cuGeom, 0, 0);
                             }
-                            md.bestMode->reconYuv.copyFromPicYuv(reconPic, cu.m_cuAddr, cuGeom.absPartIdx); // TODO:
                         }
                     }
                 }
@@ -2123,7 +2144,13 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
         /* Copy best data to encData CTU and recon */
         md.bestMode->cu.copyToPic(depth);
         if (m_param->rdLevel)
+        {
+            /* Phase 3: no-op if reconYuv was setReconView'd into reconPic (data
+             * is already there). resetView restores the owned scratch so the
+             * next CTU starts from a clean state. */
             md.bestMode->reconYuv.copyToPicYuv(reconPic, cuAddr, cuGeom.absPartIdx);
+            md.bestMode->reconYuv.resetView();
+        }
 
         if ((m_limitTU & X265_TU_LIMIT_NEIGH) && cuGeom.log2CUSize >= 4)
         {

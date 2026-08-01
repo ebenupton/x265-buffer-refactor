@@ -30,6 +30,30 @@
 #include "primitives.h"
 #define BUFFER_PADDING 8
 
+/* ASAN redzone instrumentation — when built with -fsanitize=address, this
+ * inserts a 4 KB poisoned region between the luma and chroma planes of
+ * every Yuv create(). Any consumer that reads past the CU's luma boundary
+ * (i.e., past sizeL bytes in m_buf[0]) lands in the redzone and ASAN
+ * reports a use-after-poison with a stack trace.
+ *
+ * Used to diagnose the Phase 1 fencYuv-as-view MD5 regression. */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define X265_ASAN 1
+#    include <sanitizer/asan_interface.h>
+#  endif
+#endif
+#if !defined(X265_ASAN) && defined(__SANITIZE_ADDRESS__)
+#  define X265_ASAN 1
+#  include <sanitizer/asan_interface.h>
+#endif
+
+#if X265_ASAN
+#  define YUV_REDZONE 4096
+#else
+#  define YUV_REDZONE 0
+#endif
+
 using namespace X265_NS;
 
 Yuv::Yuv()
@@ -37,6 +61,12 @@ Yuv::Yuv()
     m_buf[0] = NULL;
     m_buf[1] = NULL;
     m_buf[2] = NULL;
+    m_ownedBuf[0] = NULL;
+    m_ownedBuf[1] = NULL;
+    m_ownedBuf[2] = NULL;
+    m_ownedSize  = 0;
+    m_ownedCSize = 0;
+    m_isView = false;
 }
 
 bool Yuv::create(uint32_t size, int csp)
@@ -44,6 +74,7 @@ bool Yuv::create(uint32_t size, int csp)
     m_csp = csp;
     m_hChromaShift = CHROMA_H_SHIFT(csp);
     m_vChromaShift = CHROMA_V_SHIFT(csp);
+    m_isView = false;
 
     m_size  = size;
     m_part = partitionFromSizes(size, size);
@@ -53,28 +84,53 @@ bool Yuv::create(uint32_t size, int csp)
             for (int k = 0; k < INTEGRAL_PLANE_NUM; k++)
                 m_integral[i][j][k] = NULL;
 
+    /* PADDING RE-ENABLED for valgrind investigation. */
+    const uint32_t STRIDE_ALIGN = 64;
+    uint32_t lumaStride = (size + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
     if (csp == X265_CSP_I400)
     {
-        CHECKED_MALLOC(m_buf[0], pixel, size * size + BUFFER_PADDING);
+        CHECKED_MALLOC(m_buf[0], pixel, lumaStride * size + BUFFER_PADDING);
         m_buf[1] = m_buf[2] = 0;
+        m_size  = lumaStride;
         m_csize = 0;
+        m_ownedBuf[0] = m_buf[0];
+        m_ownedBuf[1] = NULL;
+        m_ownedBuf[2] = NULL;
+        m_ownedSize   = m_size;
+        m_ownedCSize  = 0;
         return true;
     }
     else
     {
-        m_csize = size >> m_hChromaShift;
+        uint32_t chromaWidth  = size >> m_hChromaShift;
+        uint32_t chromaHeight = size >> m_vChromaShift;
+        uint32_t chromaStride = (chromaWidth + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
 
-        size_t sizeL = size * size;
-        size_t sizeC = sizeL >> (m_vChromaShift + m_hChromaShift);
+        m_size  = lumaStride;
+        m_csize = chromaStride;
+
+        size_t sizeL = (size_t)lumaStride * size;
+        size_t sizeC = (size_t)chromaStride * chromaHeight;
 
         X265_CHECK((sizeC & 15) == 0, "invalid size");
         size_t totalSize = sizeL + sizeC * 2 + 8 + BUFFER_PADDING;
 
-        // memory allocation (padded for SIMD reads)
-        CHECKED_MALLOC(m_buf[0], pixel, totalSize);
-        m_buf[1] = m_buf[0] + sizeL;
-        m_buf[2] = m_buf[0] + sizeL + sizeC;
-        X265_CHECK(m_buf[2] + sizeC <= m_buf[0] + totalSize, "Buffer overflow detected");
+        /* memory allocation: ToT's totalSize (incl. BUFFER_PADDING for SIMD
+         * over-reads) plus the refactor's luma/chroma redzone. */
+        CHECKED_MALLOC(m_buf[0], pixel, totalSize + YUV_REDZONE);
+        m_buf[1] = m_buf[0] + sizeL + YUV_REDZONE;
+        m_buf[2] = m_buf[0] + sizeL + YUV_REDZONE + sizeC;
+#if X265_ASAN
+        __asan_poison_memory_region(m_buf[0] + sizeL, YUV_REDZONE * sizeof(pixel));
+#endif
+        /* Phase 3 (2026-07-01): snapshot the just-allocated state so
+         * setReconView / resetView can toggle between owned scratch and a
+         * picture-buffer view without losing the allocation. */
+        m_ownedBuf[0] = m_buf[0];
+        m_ownedBuf[1] = m_buf[1];
+        m_ownedBuf[2] = m_buf[2];
+        m_ownedSize   = m_size;
+        m_ownedCSize  = m_csize;
         return true;
     }
 
@@ -82,13 +138,106 @@ fail:
     return false;
 }
 
+/* Same as create() but skips buffer allocation. Used for Yuvs intended to be
+ * views into an external buffer (currently the picture buffer via setView).
+ * m_buf[] stay NULL; m_size/m_csize stay as the CU-width values for now and
+ * will be overwritten to the external stride when setView is called. */
+bool Yuv::createView(uint32_t size, int csp)
+{
+    m_csp = csp;
+    m_hChromaShift = CHROMA_H_SHIFT(csp);
+    m_vChromaShift = CHROMA_V_SHIFT(csp);
+    m_isView = true;
+
+    m_size  = size;
+    m_part  = partitionFromSizes(size, size);
+
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < MAX_NUM_REF; j++)
+            for (int k = 0; k < INTEGRAL_PLANE_NUM; k++)
+                m_integral[i][j][k] = NULL;
+
+    m_csize  = (csp == X265_CSP_I400) ? 0 : (size >> m_hChromaShift);
+    m_buf[0] = m_buf[1] = m_buf[2] = NULL;
+    return true;
+}
+
+/* Repoint the Yuv at the CU's pixels inside an external picture buffer.
+ * Strides become the picture-level strides, NOT the CU width. */
+void Yuv::setView(const PicYuv& srcPic, uint32_t cuAddr, uint32_t absPartIdx)
+{
+    X265_CHECK(m_isView, "setView called on a Yuv that was create()'d, not createView()'d\n");
+
+    /* getLumaAddr(cuAddr, absPartIdx) gives the picture-buffer pointer to the
+     * CU's top-left. The result is the same pixel that copyFromPicYuv would
+     * have copied into m_buf[0][0]. */
+    m_buf[0] = const_cast<pixel *>(srcPic.getLumaAddr(cuAddr, absPartIdx));
+    m_size   = srcPic.m_stride;
+    if (m_csp != X265_CSP_I400)
+    {
+        m_buf[1] = const_cast<pixel *>(srcPic.getCbAddr(cuAddr, absPartIdx));
+        m_buf[2] = const_cast<pixel *>(srcPic.getCrAddr(cuAddr, absPartIdx));
+        m_csize  = srcPic.m_strideC;
+    }
+}
+
+/* Phase 3 (2026-07-01): temporarily view a create()'d Yuv into the
+ * reconstruction-picture buffer for direct write.  Preserves the owned
+ * allocation so resetView() can restore it. */
+void Yuv::setReconView(PicYuv& dstPic, uint32_t cuAddr, uint32_t absPartIdx)
+{
+    X265_CHECK(m_ownedBuf[0] != NULL, "setReconView on a Yuv that never allocated\n");
+    X265_CHECK(!m_isView, "setReconView on an already-viewed Yuv\n");
+
+    m_buf[0] = dstPic.getLumaAddr(cuAddr, absPartIdx);
+    m_size   = dstPic.m_stride;
+    if (m_csp != X265_CSP_I400)
+    {
+        m_buf[1] = dstPic.getCbAddr(cuAddr, absPartIdx);
+        m_buf[2] = dstPic.getCrAddr(cuAddr, absPartIdx);
+        m_csize  = dstPic.m_strideC;
+    }
+    m_isView = true;
+}
+
+/* Phase 3 (2026-07-01): restore the owned allocation after setReconView. */
+void Yuv::resetView()
+{
+    if (!m_isView)
+        return;
+    X265_CHECK(m_ownedBuf[0] != NULL, "resetView on a Yuv without an owned allocation\n");
+    m_buf[0] = m_ownedBuf[0];
+    m_buf[1] = m_ownedBuf[1];
+    m_buf[2] = m_ownedBuf[2];
+    m_size   = m_ownedSize;
+    m_csize  = m_ownedCSize;
+    m_isView = false;
+}
+
 void Yuv::destroy()
 {
-    X265_FREE(m_buf[0]);
+    /* Free the owned allocation (from create()) if there is one.  A Yuv from
+     * createView() has m_ownedBuf[0]==NULL and owns nothing; a Yuv currently
+     * in setReconView() also has m_isView=true but its m_ownedBuf still owns
+     * the scratch — free THAT, not the view pointer.  Do NOT NULL-out
+     * m_buf[1]/[2] because upstream leaves them set post-destroy(). */
+    if (m_ownedBuf[0])
+    {
+#if X265_ASAN
+        __asan_unpoison_memory_region(m_ownedBuf[0], 4 * 1024 * 1024);
+#endif
+        X265_FREE(m_ownedBuf[0]);
+    }
 }
 
 void Yuv::copyToPicYuv(PicYuv& dstPic, uint32_t cuAddr, uint32_t absPartIdx) const
 {
+    /* Phase 3 (2026-07-01): if we're currently a view AND the view target
+     * matches dstPic at these coordinates, the copy is a no-op — the writes
+     * that populated this Yuv already landed in dstPic. */
+    if (m_isView && dstPic.getLumaAddr(cuAddr, absPartIdx) == m_buf[0])
+        return;
+
     pixel* dstY = dstPic.getLumaAddr(cuAddr, absPartIdx);
     primitives.cu[m_part].copy_pp(dstY, dstPic.m_stride, m_buf[0], m_size);
     if (m_csp != X265_CSP_I400)
@@ -122,6 +271,28 @@ void Yuv::copyFromYuv(const Yuv& srcYuv)
     {
         primitives.chroma[m_csp].cu[m_part].copy_pp(m_buf[1], m_csize, srcYuv.m_buf[1], srcYuv.m_csize);
         primitives.chroma[m_csp].cu[m_part].copy_pp(m_buf[2], m_csize, srcYuv.m_buf[2], srcYuv.m_csize);
+    }
+}
+
+/* Phase 2 (2026-07-01): O(1) pointer-swap alternative to copyFromYuv. See
+ * yuv.h for the invariants. When both Yuvs are non-view with matching
+ * dimensions, swapping m_buf[0..2] leaves both objects in valid state and
+ * preserves subsequent destroy() correctness (each still frees exactly one
+ * allocation). */
+void Yuv::adoptFrom(Yuv& src)
+{
+    X265_CHECK(!m_isView && !src.m_isView,   "adoptFrom on a view Yuv\n");
+    X265_CHECK(m_size  == src.m_size,        "adoptFrom size mismatch\n");
+    X265_CHECK(m_csize == src.m_csize,       "adoptFrom csize mismatch\n");
+    X265_CHECK(m_part  == src.m_part,        "adoptFrom part mismatch\n");
+    X265_CHECK(m_csp   == src.m_csp,         "adoptFrom csp mismatch\n");
+
+    /* Only the pixel-data pointers move. All shape metadata stays fixed. */
+    pixel* tmp = m_buf[0]; m_buf[0] = src.m_buf[0]; src.m_buf[0] = tmp;
+    if (m_csp != X265_CSP_I400)
+    {
+        tmp = m_buf[1]; m_buf[1] = src.m_buf[1]; src.m_buf[1] = tmp;
+        tmp = m_buf[2]; m_buf[2] = src.m_buf[2]; src.m_buf[2] = tmp;
     }
 }
 

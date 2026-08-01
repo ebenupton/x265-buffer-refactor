@@ -242,6 +242,46 @@ void pelFilterChroma_H_c(pixel *src, intptr_t srcStep, intptr_t offset, int32_t 
     src[3 + offset * 0] = x265_clip(m4 - (delta & maskQ));
 }
 
+/* WEAK luma filter — extracted from inline pelFilterLuma in deblock.cpp
+ * so it can be dispatched through the primitive table and accelerated. */
+static void pelFilterLumaWeak_c(pixel* src, intptr_t srcStep, intptr_t offset, int32_t tc,
+                                int32_t maskP, int32_t maskQ, int32_t maskP1, int32_t maskQ1)
+{
+    int32_t thrCut = tc * 10;
+    int32_t tc2 = tc >> 1;
+    maskP1 &= maskP;
+    maskQ1 &= maskQ;
+
+    for (int32_t i = 0; i < UNIT_SIZE; i++, src += srcStep)
+    {
+        int16_t m4 = (int16_t)src[0];
+        int16_t m3 = (int16_t)src[-offset];
+        int16_t m5 = (int16_t)src[offset];
+        int16_t m2 = (int16_t)src[-offset * 2];
+
+        int32_t delta = (9 * (m4 - m3) - 3 * (m5 - m2) + 8) >> 4;
+
+        if (abs(delta) < thrCut)
+        {
+            delta = x265_clip3(-tc, tc, delta);
+
+            src[-offset] = x265_clip(m3 + (delta & maskP));
+            src[0]       = x265_clip(m4 - (delta & maskQ));
+            if (maskP1)
+            {
+                int16_t m1 = (int16_t)src[-offset * 3];
+                int32_t delta1 = x265_clip3(-tc2, tc2, ((((m1 + m3 + 1) >> 1) - m2 + delta) >> 1));
+                src[-offset * 2] = x265_clip(m2 + delta1);
+            }
+            if (maskQ1)
+            {
+                int16_t m6 = (int16_t)src[offset * 2];
+                int32_t delta2 = x265_clip3(-tc2, tc2, ((((m6 + m4 + 1) >> 1) - m5 - delta) >> 1));
+                src[offset] = x265_clip(m5 + delta2);
+            }
+        }
+    }
+}
 }
 
 namespace X265_NS {
@@ -262,5 +302,7 @@ void setupLoopFilterPrimitives_c(EncoderPrimitives &p)
     p.pelFilterLumaStrong[1] = pelFilterLumaStrong_c;
     p.pelFilterChroma[0]     = pelFilterChroma_V_c;
     p.pelFilterChroma[1]     = pelFilterChroma_H_c;
+    p.pelFilterLumaWeak[0]   = pelFilterLumaWeak_c;
+    p.pelFilterLumaWeak[1]   = pelFilterLumaWeak_c;
 }
 }

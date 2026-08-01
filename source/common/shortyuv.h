@@ -41,8 +41,11 @@ public:
 
     int16_t* m_buf[3];
 
-    uint32_t m_size;
-    uint32_t m_csize;
+    uint32_t m_size;         // luma stride (padded to STRIDE_ALIGN)
+    uint32_t m_csize;        // chroma stride (padded)
+    /* Heights are separate from strides now that m_size is padded. */
+    uint32_t m_lumaHeight;
+    uint32_t m_chromaHeight;
 
     int      m_csp;
     int      m_hChromaShift;

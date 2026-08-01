@@ -49,10 +49,48 @@ public:
     int      m_vChromaShift;
     uint32_t *m_integral[2][MAX_NUM_REF][INTEGRAL_PLANE_NUM];
 
+    /* Memory-refactor (Phase 1, 2026-06-30): when true, m_buf[] points into
+     * an external buffer (e.g. the picture-level PicYuv); destroy() must NOT
+     * free m_buf[0], and m_size/m_csize are the EXTERNAL stride, not the
+     * tight CU width. Set by setView() / createView() / setReconView(). */
+    bool     m_isView;
+
+    /* Memory-refactor (Phase 3, 2026-07-01): a Yuv that was create()'d has an
+     * owned pixel allocation.  When we temporarily point m_buf[] into the
+     * picture buffer (setReconView), we stash the owned pointer + strides
+     * here so resetView() can restore them.  For createView()'d Yuvs the
+     * owned pointer stays NULL — those never own a buffer. */
+    pixel*   m_ownedBuf[3];
+    uint32_t m_ownedSize;
+    uint32_t m_ownedCSize;
+
     Yuv();
 
     bool   create(uint32_t size, int csp);
+    /* Like create() but skips buffer allocation; the Yuv is intended to be
+     * used as a view via setView(). m_buf[] stay NULL until setView() runs. */
+    bool   createView(uint32_t size, int csp);
     void   destroy();
+
+    /* Replace m_buf[] with a pointer into srcPicYuv at the given CTU.
+     * After this call:
+     *   m_buf[0] = picture's luma top-left of the CU at (cuAddr, absPartIdx)
+     *   m_size   = srcPicYuv.m_stride  (i.e., the picture-level stride)
+     *   m_csize  = srcPicYuv.m_strideC
+     *   m_isView = true
+     * Caller must guarantee Yuv was set up via createView() — does NOT free
+     * any existing allocation. */
+    void   setView(const PicYuv& srcPicYuv, uint32_t cuAddr, uint32_t absPartIdx);
+
+    /* Phase 3 (2026-07-01): point a create()'d Yuv into a picture buffer for
+     * WRITE access. Unlike setView(), the caller must have create()'d this
+     * Yuv (m_ownedBuf[0] != NULL). setReconView() stashes the current
+     * m_buf/m_size/m_csize into m_ownedBuf/m_ownedSize/m_ownedCSize so
+     * resetView() can restore them. Writes through this Yuv land directly
+     * in dstPicYuv's frame allocation; copyToPicYuv() becomes a no-op while
+     * the view is active. */
+    void   setReconView(PicYuv& dstPicYuv, uint32_t cuAddr, uint32_t absPartIdx);
+    void   resetView();
 
     // Copy YUV buffer to picture buffer
     void   copyToPicYuv(PicYuv& destPicYuv, uint32_t cuAddr, uint32_t absPartIdx) const;
@@ -62,6 +100,15 @@ public:
 
     // Copy from same size YUV buffer
     void   copyFromYuv(const Yuv& srcYuv);
+
+    /* Phase 2 (2026-07-01): O(1) alternative to copyFromYuv when the source
+     * Yuv is about to be discarded / reused as scratch. Swaps the m_buf[3]
+     * pointers between `*this` and `src`. Both Yuvs must have compatible
+     * dimensions (equal m_size / m_csize / m_part / m_csp); neither may be a
+     * view (m_isView must be false on both). After the call, `src` no longer
+     * holds the original pixel data — callers that read `src` afterwards
+     * must be updated to read `*this` (which now holds the data). */
+    void   adoptFrom(Yuv& src);
 
     // Copy portion of srcYuv into ME prediction buffer
     void   copyPUFromYuv(const Yuv& srcYuv, uint32_t absPartIdx, int partEnum, bool bChroma);

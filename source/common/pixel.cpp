@@ -368,6 +368,7 @@ int sa8d16(const pixel* pix1, intptr_t i_pix1, const pixel* pix2, intptr_t i_pix
     return cost;
 }
 
+
 template<int size>
 sse_t pixel_ssd_s_c(const int16_t* a, intptr_t dstride)
 {
@@ -461,16 +462,17 @@ void cpy1Dto2D_shr(int16_t* dst, const int16_t* src, intptr_t dstStride, int shi
 }
 
 template<int blockSize>
-void getResidual(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride)
+void getResidual(const pixel* fenc, const pixel* pred, int16_t* residual,
+                 intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
 {
     for (int y = 0; y < blockSize; y++)
     {
         for (int x = 0; x < blockSize; x++)
             residual[x] = static_cast<int16_t>(fenc[x]) - static_cast<int16_t>(pred[x]);
 
-        fenc += stride;
-        residual += stride;
-        pred += stride;
+        fenc     += fencStride;
+        pred     += predStride;
+        residual += resiStride;
     }
 }
 

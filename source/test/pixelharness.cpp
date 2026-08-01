@@ -2258,6 +2258,70 @@ bool PixelHarness::check_pelFilterChroma_V(pelFilterChroma_t ref, pelFilterChrom
     return true;
 }
 
+bool PixelHarness::check_pelFilterLumaWeak_V(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt)
+{
+    intptr_t srcStep = 64, offset = 1;
+    int32_t tc, maskP, maskQ, maskP1, maskQ1;
+    int j = 0;
+
+    pixel pixel_test_buff1[TEST_CASES][BUFFSIZE];
+    for (int i = 0; i < TEST_CASES; i++)
+        memcpy(pixel_test_buff1[i], pixel_test_buff[i], sizeof(pixel) * BUFFSIZE);
+
+    for (int i = 0; i < ITERS; i++)
+    {
+        tc     = rand() % PIXEL_MAX;
+        maskP  = (rand() % PIXEL_MAX) - 1;
+        maskQ  = (rand() % PIXEL_MAX) - 1;
+        maskP1 = (rand() & 1) ? -1 : 0;
+        maskQ1 = (rand() & 1) ? -1 : 0;
+
+        int index = rand() % 3;
+
+        ref(pixel_test_buff[index] + 4 + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+        checked(opt, pixel_test_buff1[index] + 4 + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+
+        if (memcmp(pixel_test_buff[index], pixel_test_buff1[index], sizeof(pixel) * BUFFSIZE))
+            return false;
+
+        reportfail()
+        j += INCR;
+    }
+    return true;
+}
+
+bool PixelHarness::check_pelFilterLumaWeak_H(pelFilterLumaWeak_t ref, pelFilterLumaWeak_t opt)
+{
+    intptr_t srcStep = 1, offset = 64;
+    int32_t tc, maskP, maskQ, maskP1, maskQ1;
+    int j = 0;
+
+    pixel pixel_test_buff1[TEST_CASES][BUFFSIZE];
+    for (int i = 0; i < TEST_CASES; i++)
+        memcpy(pixel_test_buff1[i], pixel_test_buff[i], sizeof(pixel) * BUFFSIZE);
+
+    for (int i = 0; i < ITERS; i++)
+    {
+        tc     = rand() % PIXEL_MAX;
+        maskP  = (rand() % PIXEL_MAX) - 1;
+        maskQ  = (rand() % PIXEL_MAX) - 1;
+        maskP1 = (rand() & 1) ? -1 : 0;
+        maskQ1 = (rand() & 1) ? -1 : 0;
+
+        int index = rand() % 3;
+
+        ref(pixel_test_buff[index]  + 4 * offset + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+        checked(opt, pixel_test_buff1[index] + 4 * offset + j, srcStep, offset, tc, maskP, maskQ, maskP1, maskQ1);
+
+        if (memcmp(pixel_test_buff[index], pixel_test_buff1[index], sizeof(pixel) * BUFFSIZE))
+            return false;
+
+        reportfail()
+        j += INCR;
+    }
+    return true;
+}
+
 bool PixelHarness::check_integral_initv(integralv_t ref, integralv_t opt)
 {
     intptr_t srcStep = 64;
@@ -3163,6 +3227,24 @@ bool PixelHarness::testCorrectness(const EncoderPrimitives& ref, const EncoderPr
         }
     }
 
+    if (opt.pelFilterLumaWeak[0])
+    {
+        if (!check_pelFilterLumaWeak_V(ref.pelFilterLumaWeak[0], opt.pelFilterLumaWeak[0]))
+        {
+            printf("pelFilterLumaWeak Vertical failed!\n");
+            return false;
+        }
+    }
+
+    if (opt.pelFilterLumaWeak[1])
+    {
+        if (!check_pelFilterLumaWeak_H(ref.pelFilterLumaWeak[1], opt.pelFilterLumaWeak[1]))
+        {
+            printf("pelFilterLumaWeak Horizontal failed!\n");
+            return false;
+        }
+    }
+
     for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)
     {
         if (opt.integral_initv[k] && !check_integral_initv(ref.integral_initv[k], opt.integral_initv[k]))
@@ -3859,6 +3941,28 @@ void PixelHarness::measureSpeed(const EncoderPrimitives& ref, const EncoderPrimi
             REPORT_SPEEDUP(opt.pelFilterChroma[1], ref.pelFilterChroma[1], pbuf1 + 2 * STRIDE,
                            1, STRIDE, tc, maskP, maskQ);
         }
+    }
+
+    if (opt.pelFilterLumaWeak[0])
+    {
+        int32_t tc     = (rand() % PIXEL_MAX);
+        int32_t maskP  = (rand() % PIXEL_MAX) - 1;
+        int32_t maskQ  = (rand() % PIXEL_MAX) - 1;
+        int32_t maskP1 = (rand() & 1) ? -1 : 0;
+        int32_t maskQ1 = (rand() & 1) ? -1 : 0;
+        HEADER0("pelFilterLumaWeak_Vertical");
+        REPORT_SPEEDUP(opt.pelFilterLumaWeak[0], ref.pelFilterLumaWeak[0], pbuf1, STRIDE, 1, tc, maskP, maskQ, maskP1, maskQ1);
+    }
+
+    if (opt.pelFilterLumaWeak[1])
+    {
+        int32_t tc     = (rand() % PIXEL_MAX);
+        int32_t maskP  = (rand() % PIXEL_MAX) - 1;
+        int32_t maskQ  = (rand() % PIXEL_MAX) - 1;
+        int32_t maskP1 = (rand() & 1) ? -1 : 0;
+        int32_t maskQ1 = (rand() & 1) ? -1 : 0;
+        HEADER0("pelFilterLumaWeak_Horizontal");
+        REPORT_SPEEDUP(opt.pelFilterLumaWeak[1], ref.pelFilterLumaWeak[1], pbuf1, 1, STRIDE, tc, maskP, maskQ, maskP1, maskQ1);
     }
 
     for (int k = 0; k < NUM_INTEGRAL_SIZE; k++)

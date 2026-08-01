@@ -462,7 +462,8 @@ void setupNeonPrimitives(EncoderPrimitives &p)
     ALL_LUMA_PU(pixelavg_pp[NONALIGNED], pixel_avg_pp, neon);
     ALL_LUMA_PU(pixelavg_pp[ALIGNED], pixel_avg_pp, neon);
 
-    // calc_Residual
+    /* Memory-refactor 2026-07-01: calcresidual .S variants updated to the
+     * 3-stride signature (fenc/pred/resi). Re-registered. */
     p.cu[BLOCK_4x4].calcresidual[NONALIGNED]   = PFX(getResidual4_neon);
     p.cu[BLOCK_8x8].calcresidual[NONALIGNED]   = PFX(getResidual8_neon);
     p.cu[BLOCK_16x16].calcresidual[NONALIGNED] = PFX(getResidual16_neon);
@@ -589,7 +590,7 @@ void setupSve2Primitives(EncoderPrimitives &p)
     LUMA_PU_MULTIPLE_ARCHS_3(pixelavg_pp[NONALIGNED], pixel_avg_pp, sve2);
     LUMA_PU_MULTIPLE_ARCHS_3(pixelavg_pp[ALIGNED], pixel_avg_pp, sve2);
 
-    // calc_Residual
+    /* Memory-refactor 2026-07-01: SVE2 calcresidual .S updated to 3-stride sig. */
     p.cu[BLOCK_16x16].calcresidual[NONALIGNED] = PFX(getResidual16_sve2);
     p.cu[BLOCK_32x32].calcresidual[NONALIGNED] = PFX(getResidual32_sve2);
 
@@ -702,6 +703,7 @@ void setupIntrinsicPrimitives(EncoderPrimitives &p, int cpuMask)
         setupFilterPrimitives_neon(p);
         setupDCTPrimitives_neon(p);
         setupLoopFilterPrimitives_neon(p);
+        setupDeblockPrimitives_neon(p);
         setupIntraPrimitives_neon(p);
         setupSaoPrimitives_neon(p);
     }

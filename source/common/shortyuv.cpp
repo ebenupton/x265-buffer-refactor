@@ -40,15 +40,26 @@ ShortYuv::ShortYuv()
 bool ShortYuv::create(uint32_t size, int csp)
 {
     m_csp = csp;
-    m_size = size;
     m_hChromaShift = CHROMA_H_SHIFT(csp);
     m_vChromaShift = CHROMA_V_SHIFT(csp);
-    size_t sizeL = size * size;
+
+    /* Match Yuv's stride-padding so calcresidual (which uses a single stride
+     * for fenc/pred/residual) doesn't walk off the end of this buffer when
+     * the aligned primitive variant is selected. See yuv.cpp for details. */
+    const uint32_t STRIDE_ALIGN = 64;
+    uint32_t lumaStride = (size + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
+    m_size = lumaStride;
+    m_lumaHeight = size;
+    size_t sizeL = (size_t)lumaStride * size;
 
     if (csp != X265_CSP_I400)
     {
-        m_csize = size >> m_hChromaShift;
-        size_t sizeC = sizeL >> (m_hChromaShift + m_vChromaShift);
+        uint32_t chromaWidth  = size >> m_hChromaShift;
+        uint32_t chromaHeight = size >> m_vChromaShift;
+        uint32_t chromaStride = (chromaWidth + STRIDE_ALIGN - 1) & ~(STRIDE_ALIGN - 1);
+        m_csize = chromaStride;
+        m_chromaHeight = chromaHeight;
+        size_t sizeC = (size_t)chromaStride * chromaHeight;
         X265_CHECK((sizeC & 15) == 0, "invalid size");
 
         CHECKED_MALLOC(m_buf[0], int16_t, sizeL + sizeC * 2);
@@ -57,6 +68,7 @@ bool ShortYuv::create(uint32_t size, int csp)
     }
     else
     {
+        m_chromaHeight = 0;
         CHECKED_MALLOC(m_buf[0], int16_t, sizeL);
         m_buf[1] = m_buf[2] = NULL;
     }
@@ -73,9 +85,12 @@ void ShortYuv::destroy()
 
 void ShortYuv::clear()
 {
-    memset(m_buf[0], 0, (m_size  * m_size) *  sizeof(int16_t));
-    memset(m_buf[1], 0, (m_csize * m_csize) * sizeof(int16_t));
-    memset(m_buf[2], 0, (m_csize * m_csize) * sizeof(int16_t));
+    /* m_size is stride, m_lumaHeight is actual row count. */
+    memset(m_buf[0], 0, (size_t)m_size  * m_lumaHeight   * sizeof(int16_t));
+    if (m_buf[1])
+        memset(m_buf[1], 0, (size_t)m_csize * m_chromaHeight * sizeof(int16_t));
+    if (m_buf[2])
+        memset(m_buf[2], 0, (size_t)m_csize * m_chromaHeight * sizeof(int16_t));
 }
 
 void ShortYuv::subtract(const Yuv& srcYuv0, const Yuv& srcYuv1, uint32_t log2Size, int picCsp)

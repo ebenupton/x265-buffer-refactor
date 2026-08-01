@@ -36,22 +36,25 @@
 
 .text
 
+// getResidualNN_sve2(const pixel* fenc, const pixel* pred, int16_t* residual,
+//                    intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
+//   x0=fenc, x1=pred, x2=residual, x3=fencStride, x4=predStride, x5=resiStride (int16_t units)
 function PFX(getResidual16_sve2)
     rdvl            x9, #1
     cmp             x9, #16
     bgt             .vl_gt_16_getResidual16
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1
 .rept 8
     ld1             {v0.16b}, [x0], x3
-    ld1             {v1.16b}, [x1], x3
+    ld1             {v1.16b}, [x1], x4
     ld1             {v2.16b}, [x0], x3
-    ld1             {v3.16b}, [x1], x3
+    ld1             {v3.16b}, [x1], x4
     usubl           v4.8h, v0.8b, v1.8b
     usubl2          v5.8h, v0.16b, v1.16b
     usubl           v6.8h, v2.8b, v3.8b
     usubl2          v7.8h, v2.16b, v3.16b
-    st1             {v4.8h-v5.8h}, [x2], x4
-    st1             {v6.8h-v7.8h}, [x2], x4
+    st1             {v4.8h-v5.8h}, [x2], x6
+    st1             {v6.8h-v7.8h}, [x2], x6
 .endr
     ret
 .vl_gt_16_getResidual16:
@@ -60,10 +63,10 @@ function PFX(getResidual16_sve2)
     ld1b            {z0.h}, p0/z, [x0]
     ld1b            {z2.h}, p0/z, [x1]
     add             x0, x0, x3
-    add             x1, x1, x3
+    add             x1, x1, x4
     sub             z4.h, z0.h, z2.h
     st1h            {z4.h}, p0, [x2]
-    add             x2, x2, x3, lsl #1
+    add             x2, x2, x5, lsl #1
 .endr
     ret
 endfunc
@@ -72,15 +75,15 @@ function PFX(getResidual32_sve2)
     rdvl            x9, #1
     cmp             x9, #16
     bgt             .vl_gt_16_getResidual32
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1
     mov             w12, #4
 .Loop_residual_32:
     sub             w12, w12, #1
 .rept 4
     ld1             {v0.16b-v1.16b}, [x0], x3
-    ld1             {v2.16b-v3.16b}, [x1], x3
+    ld1             {v2.16b-v3.16b}, [x1], x4
     ld1             {v4.16b-v5.16b}, [x0], x3
-    ld1             {v6.16b-v7.16b}, [x1], x3
+    ld1             {v6.16b-v7.16b}, [x1], x4
     usubl           v16.8h, v0.8b, v2.8b
     usubl2          v17.8h, v0.16b, v2.16b
     usubl           v18.8h, v1.8b, v3.8b
@@ -89,8 +92,8 @@ function PFX(getResidual32_sve2)
     usubl2          v21.8h, v4.16b, v6.16b
     usubl           v22.8h, v5.8b, v7.8b
     usubl2          v23.8h, v5.16b, v7.16b
-    st1             {v16.8h-v19.8h}, [x2], x4
-    st1             {v20.8h-v23.8h}, [x2], x4
+    st1             {v16.8h-v19.8h}, [x2], x6
+    st1             {v20.8h-v23.8h}, [x2], x6
 .endr
     cbnz            w12, .Loop_residual_32
     ret
@@ -102,11 +105,11 @@ function PFX(getResidual32_sve2)
     ld1b            {z0.b}, p0/z, [x0]
     ld1b            {z2.b}, p0/z, [x1]
     add             x0, x0, x3
-    add             x1, x1, x3
+    add             x1, x1, x4
     usublb          z4.h, z0.b, z2.b
     usublt          z5.h, z0.b, z2.b
     st2h            {z4.h, z5.h}, p0, [x2]
-    add             x2, x2, x3, lsl #1
+    add             x2, x2, x5, lsl #1
 .endr
     ret
 .vl_gt_48_getResidual32:
@@ -115,10 +118,10 @@ function PFX(getResidual32_sve2)
     ld1b            {z0.h}, p0/z, [x0]
     ld1b            {z4.h}, p0/z, [x1]
     add             x0, x0, x3
-    add             x1, x1, x3
+    add             x1, x1, x4
     sub             z8.h, z0.h, z4.h
     st1h            {z8.h}, p0, [x2]
-    add             x2, x2, x3, lsl #1
+    add             x2, x2, x5, lsl #1
 .endr
     ret
 endfunc

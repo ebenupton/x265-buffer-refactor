@@ -36,64 +36,66 @@
 
 .text
 
-// void getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual, intptr_t stride)
+// void getResidual4_neon(const pixel* fenc, const pixel* pred, int16_t* residual,
+//                        intptr_t fencStride, intptr_t predStride, intptr_t resiStride)
+//   x0=fenc, x1=pred, x2=residual, x3=fencStride, x4=predStride, x5=resiStride (int16_t units)
 function PFX(getResidual4_neon)
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1                // x6 = resiStride in bytes
 .rept 2
     ld1             {v0.8b}, [x0], x3
-    ld1             {v1.8b}, [x1], x3
+    ld1             {v1.8b}, [x1], x4
     ld1             {v2.8b}, [x0], x3
-    ld1             {v3.8b}, [x1], x3
+    ld1             {v3.8b}, [x1], x4
     usubl           v4.8h, v0.8b, v1.8b
     usubl           v5.8h, v2.8b, v3.8b
-    st1             {v4.8b}, [x2], x4
-    st1             {v5.8b}, [x2], x4
+    st1             {v4.8b}, [x2], x6
+    st1             {v5.8b}, [x2], x6
 .endr
     ret
 endfunc
 
 function PFX(getResidual8_neon)
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1
 .rept 4
     ld1             {v0.8b}, [x0], x3
-    ld1             {v1.8b}, [x1], x3
+    ld1             {v1.8b}, [x1], x4
     ld1             {v2.8b}, [x0], x3
-    ld1             {v3.8b}, [x1], x3
+    ld1             {v3.8b}, [x1], x4
     usubl           v4.8h, v0.8b, v1.8b
     usubl           v5.8h, v2.8b, v3.8b
-    st1             {v4.16b}, [x2], x4
-    st1             {v5.16b}, [x2], x4
+    st1             {v4.16b}, [x2], x6
+    st1             {v5.16b}, [x2], x6
 .endr
     ret
 endfunc
 
 function PFX(getResidual16_neon)
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1
 .rept 8
     ld1             {v0.16b}, [x0], x3
-    ld1             {v1.16b}, [x1], x3
+    ld1             {v1.16b}, [x1], x4
     ld1             {v2.16b}, [x0], x3
-    ld1             {v3.16b}, [x1], x3
+    ld1             {v3.16b}, [x1], x4
     usubl           v4.8h, v0.8b, v1.8b
     usubl2          v5.8h, v0.16b, v1.16b
     usubl           v6.8h, v2.8b, v3.8b
     usubl2          v7.8h, v2.16b, v3.16b
-    st1             {v4.8h-v5.8h}, [x2], x4
-    st1             {v6.8h-v7.8h}, [x2], x4
+    st1             {v4.8h-v5.8h}, [x2], x6
+    st1             {v6.8h-v7.8h}, [x2], x6
 .endr
     ret
 endfunc
 
 function PFX(getResidual32_neon)
-    lsl             x4, x3, #1
+    lsl             x6, x5, #1
     mov             w12, #4
 .Loop_residual_32:
     sub             w12, w12, #1
 .rept 4
     ld1             {v0.16b-v1.16b}, [x0], x3
-    ld1             {v2.16b-v3.16b}, [x1], x3
+    ld1             {v2.16b-v3.16b}, [x1], x4
     ld1             {v4.16b-v5.16b}, [x0], x3
-    ld1             {v6.16b-v7.16b}, [x1], x3
+    ld1             {v6.16b-v7.16b}, [x1], x4
     usubl           v16.8h, v0.8b, v2.8b
     usubl2          v17.8h, v0.16b, v2.16b
     usubl           v18.8h, v1.8b, v3.8b
@@ -102,8 +104,8 @@ function PFX(getResidual32_neon)
     usubl2          v21.8h, v4.16b, v6.16b
     usubl           v22.8h, v5.8b, v7.8b
     usubl2          v23.8h, v5.16b, v7.16b
-    st1             {v16.8h-v19.8h}, [x2], x4
-    st1             {v20.8h-v23.8h}, [x2], x4
+    st1             {v16.8h-v19.8h}, [x2], x6
+    st1             {v20.8h-v23.8h}, [x2], x6
 .endr
     cbnz            w12, .Loop_residual_32
     ret

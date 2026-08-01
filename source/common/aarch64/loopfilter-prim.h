@@ -9,6 +9,7 @@
 namespace X265_NS
 {
 void setupLoopFilterPrimitives_neon(EncoderPrimitives &p);
+void setupDeblockPrimitives_neon(EncoderPrimitives &p);
 
 };
 
