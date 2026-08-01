@@ -52,3 +52,35 @@ filters' small working sets, decision loads) or sub-0.5% gathers. The
 remaining un-NEON'able cost lives in metadata (CUData walks, entropy) —
 consistent with STAGE-COST-AUDIT's conclusion that further gains need
 architectural change, not vectorisation.
+
+# A76 NEON-path review (2026-08-01 evening)
+
+Grounding: Neoverse-N1/A76 scheduling model (LLVM td + SWOG). Facts that
+matter here: ALL ASIMD multiplies issue to V0 only (Q-form occupies it
+2 cycles); shifts are V1-only; plain arith is 2/cycle on either pipe;
+LD2 Q-form = 2L+2V uops at 7c; vec->GPR (umov) on V1; INS gpr->vec 5c.
+
+Kernels reviewed against the model + perf annotate:
+
+- interp8 vert (filter-prim.cpp): Arm's 4.2 code is already good - 5
+  D-mults per 8 outputs (unit taps folded into sub), two independent
+  chains, V0/V1 roughly balanced once shrn/loads counted. Tap-to-shift
+  decomposition would just move the bottleneck to V1. No action.
+- dct16/quant (.S): V0-multiply-bound by nature; only algebraic
+  restructuring would help, not worth the asm risk today. No action.
+- sa8d/satd: add/sub/abs on both pipes, transposes 2/cycle, single
+  terminal reduce. Near-optimal. No action.
+- intra_pred_ang: NOT multiply-bound. annotate showed the horizontal-
+  mode neighbour-flip stack buffer store at 15% of <8> self time (STLF
+  defeat on narrow reloads, repeated per mode call). KEPT: flip
+  eliminated via segment pointers (no copy at all). <8> self 3.37 ->
+  2.86%, whole-encode -0.14% 1t / -0.22% 4t, gate PASS.
+- frame_init_lowres (ours): tried LD2 -> 3xLD1 + UZP + EXT per row
+  (halves load-unit traffic, removes 7c LD2 latency). Measured NEUTRAL
+  (self 2.44 -> 2.45%; kernel is bandwidth-bound either way). REJECTED,
+  patch preserved as x265-patches/lowres-ld1uzp-neutral.patch.
+
+Net kept gain: ~0.2% whole-encode. Consistent with the audit bottom
+line: the NEON layer is mature; remaining headroom is V0 multiply
+pressure in transform/quant, which needs algorithmic change, and the
+metadata/entropy scalar layer.
