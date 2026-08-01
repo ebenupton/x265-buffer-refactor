@@ -31,11 +31,11 @@ no-op with one node; `cgroup_disable=memory` still present). Settled
 steady-state figures; the first post-boot run of each clip was slower
 (32.8 fps 30s, 35.6 fps 90s) and is excluded as boot-settling.
 
-| bench | 6.10.6 ref | 6.12.96+fakeNUMA | 6.12.96 kernel-only |
-|---|---|---|---|
-| bbb 30s 4t wall fps | 35.9 | 33.6–33.8 (ondemand), 33.9–34.2 (perf gov) | **35.6–35.8** |
-| bbb 30s 4t user cycles | 211–213 G | 205.7–207.9 G | **215.3–215.6 G** |
-| bbb 90s 4t wall fps | 35.4–35.5 | 34.2 | **37.9–38.3** |
+| bench | 6.10.6 ref | 6.12.96+fakeNUMA | 6.12.96 kernel-only | 6.12.96+fakeNUMA+banklow |
+|---|---|---|---|---|
+| bbb 30s 4t wall fps | 35.9 | 33.6–33.8 (ondemand), 33.9–34.2 (perf gov) | 35.6–35.8 (re-run 35.9–36.0) | **41.0–41.1** |
+| bbb 30s 4t user cycles | 211–213 G | 205.7–207.9 G | 215.3–215.6 G (re-run 213.9–215.0 G) | **188.9–189.3 G** |
+| bbb 90s 4t wall fps | 35.4–35.5 | 34.2 | 37.9–38.3 (re-run 37.3–38.2) | **41.1–41.2** |
 
 Cross-session absolute walls normally drift ±1.5%; −3.5–5% is outside
 that, reproduced across 8 runs and two clips.
@@ -69,13 +69,51 @@ The regression was the **fake-NUMA layer, not the kernel**:
   utilization tax there; wall ≈ user time, so it could be a genuine 1t
   win).
 
-## Bottom line
+## SUPERSEDED verdict + banklow addendum (2026-08-01 afternoon)
 
-Keep 6.12.96 **without** `numa=fake=8` (current state). At 4t it is
-wall-parity with the old kernel on in-core input and +7–8% on streaming
-input. Fake-NUMA interleave trades ~4% user cycles for ~6% wall — worse
-for the recommended 4t config. The corpus +11–12% vs the morning run is
-an artifact of the contaminated morning baseline; the new-kernel corpus
-CSV (`corpus-results-2026-08-01-k6.12-numa.csv`) was measured **with**
-fake NUMA — absolute walls there are ~3.5–5% pessimistic vs the current
-no-fake-NUMA boot, but its interleaved up/down deltas remain valid.
+The earlier verdict ("keep 6.12.96 without numa=fake=8") was measured on
+a 2024-07-30 EEPROM that **predates SDRAM_BANKLOW** (parameter added in
+bootloader 2024-09-23; banklow=1 default for 2712 since 2024-12-07) —
+i.e. fake-NUMA interleave was tested without the SDRAM bank remap it is
+designed to exploit. On that legacy map it lost ~6% wall; that result is
+valid only for old-firmware boards.
+
+After flashing bootloader 2026-05-26 (banklow=1 default; the bootloader
+now injects `numa=fake=8 system_heap.max_order=0
+iommu_dma_numa_policy=interleave` itself; `numa_policy=interleave` +
+`cgroup_disable=memory` come from the kernel package's DTB
+/chosen/bootargs, not firmware):
+
+- bbb 30s 4t: **41.0–41.1 fps / 188.9–189.3 G** user cycles vs
+  35.9–36.0 fps / 213.9–215.0 G same-day no-NUMA: **+14% wall, −12%
+  user cycles**. vs fakeNUMA-without-banklow: +20% wall.
+- bbb 90s 4t (streaming): **41.1–41.2 fps** vs 37.3–38.2: +8–10%.
+- No throttling, ≤69 °C, same kernel/binary/protocol, first run per
+  clip discarded as settling. Cross-session but far outside ±1.5% drift.
+
+Mechanism notes (source-verified, rpi-6.12.y vs stable v6.12.96):
+- The Pi tree's downstream mempolicy patch makes `numa_policy=` on the
+  cmdline no-op `set_mempolicy(2)` (silent success + pr_info after 40 s;
+  confirmed live: x265's per-thread interleave/localalloc calls ignored).
+  Only set_mempolicy is intercepted — mbind/move_pages/migrate_pages/
+  get_mempolicy are stock; thread pinning is defanged structurally
+  (every fake node advertises all CPUs). x265 IS numa-aware
+  (libx265.so links libnuma) but is fully neutralized by this.
+- Without NUMA interleave, x265's 208 MB 4t working set sits 91% in the
+  bottom 2 GB of phys memory (pagemap-measured), so high address bits
+  barely vary; interleave spreads pages across all eight 1 GB regions,
+  which only pays once banklow rearranges the bank bits.
+
+## Bottom line (revised)
+
+**Run 6.12.96 with bootloader ≥2024-12-07 defaults: banklow=1 +
+numa=fake=8 + interleave. Worth ~+14% wall / −12% user cycles at 4t on
+the recommended config (41 fps ≈ 1.37× realtime at 4 Mbps).** The
+old-firmware regression was the missing banklow, not fake NUMA itself.
+The corpus +11–12% vs the morning run is an artifact of the
+contaminated morning baseline; the new-kernel corpus CSV
+(`corpus-results-2026-08-01-k6.12-numa.csv`) was measured with fake
+NUMA but WITHOUT banklow — its absolute walls are stale on both counts
+now, but its interleaved up/down deltas remain valid. Corpus re-run on
+the banklow boot is the obvious next step if corpus-absolute numbers
+are wanted.
