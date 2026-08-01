@@ -84,3 +84,59 @@ Net kept gain: ~0.2% whole-encode. Consistent with the audit bottom
 line: the NEON layer is mature; remaining headroom is V0 multiply
 pressure in transform/quant, which needs algorithmic change, and the
 metadata/entropy scalar layer.
+
+# Multi-thread structure vs 2MB L3 study (2026-08-01 night)
+
+Question (Eben): can the multi-thread approach be restructured/constrained
+for Pi 5's 2MB shared L3?
+
+## Measurements (bbb 30s, rec config, banklow boot, PMU counters)
+
+| config | fps | cycles | instr | IPC | L2 refill | L3 refill |
+|---|---|---|---|---|---|---|
+| ft4+wpp | 40.9-42.1 | 187-188G | 296.5G | 1.569 | 0.72G | 0.74-0.76G |
+| ft3+wpp | 41.7-41.9 | 186.4-187G | - | - | 0.70G | 0.74-0.75G |
+| ft2+wpp | 40.3-40.7 | 186.1-186.6G | 296.9G | 1.579 | 0.72G | 0.74-0.75G |
+| ft1+wpp | 35.7 | **174.4G** | 297.5G | **1.687** | 0.71G | **0.65G** |
+| ft4 no-wpp | 34.4-34.6 | 183.2G | - | - | **0.61G** | 0.78G |
+
+## Findings
+
+1. **No L3 capacity thrash**: refills flat across ft2-4 - the four
+   ~250KB row windows fit the 2MB SLC; frame-lag-runaway hypothesis
+   refuted at this depth.
+2. **Frame threading costs 7% IPC at identical work**: instructions
+   flat (296.5-297.5G); ft1 runs 1.687 IPC vs 1.569 at ft4 with EQUAL
+   L2/L3 miss counts. The gap is transfer latency, not misses: the
+   successor frame's ME/MC reads recon lines still dirty in the
+   producer core's private L2 (C2C snoops, invisible to refill
+   counters). ~2G of the 12.6G gap is the L3-refill delta; ~10G is C2C.
+3. **WPP-only can't cash it in**: ft1 utilization is 2.88 CPUs - the
+   2-CTU entropy-context chain between rows is the intrinsic limiter,
+   not just frame-boundary drain. ft1 wall = 35.7 fps.
+4. **Soft frame affinity is a wash** (patch preserved:
+   pool-frame-affinity-neutral.patch - worker-id-rotated provider scan;
+   gate PASS): wall/IPC/refills unchanged. Expected in hindsight -
+   producer->consumer C2C between frames is unavoidable by placement;
+   only volume (fewer frame threads) or latency hiding can touch it.
+5. ft4 no-wpp has the best private-L2 locality (0.61G - one frame per
+   core) but worst wall: ref-row dependency stalls dominate. Locality
+   and utilization pull opposite ways; ft4+wpp remains wall-optimal.
+6. **ft3 is wall-equal to ft4** with ~0.5% fewer cycles and one frame
+   less latency - preferable where latency/power matter; recommended
+   config left at ft4 pending corpus-level confirmation.
+
+## Open levers (unexplored, sketched)
+
+- Consumer-side software prefetch (PRFM PLDL2KEEP) of the near-
+  collocated ref window one CTU ahead at dia/merange-8 - directly hides
+  the diagnosed C2C latency; window is predictable at this config.
+- Producer-side DC CVAC of completed recon rows to convert dirty-line
+  snoops into clean forwards.
+- Max-lag cap on frame threading: predicted insufficient from the
+  utilization math (drain bubble is minor vs row-grain stalls).
+
+Bottom line: the multi-thread structure is already at a measured
+locality/utilization optimum for this L3; the 7%-IPC frame-pipelining
+tax is structural C2C, and the two latency-hiding levers above are the
+only credible attacks left on it.
