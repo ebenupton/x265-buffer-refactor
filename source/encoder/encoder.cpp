@@ -256,11 +256,13 @@ void Encoder::create()
         p->bEnableWavefront = 0;
     }
 
-    // For zero-latency tune, frameNumThreads must be set to 1
-    if (p->tune && (!strcmp(p->tune, "zerolatency") || !strcmp(p->tune, "zero-latency")))
-    {
-        p->frameNumThreads = 1;
-    }
+    /* Rebase deviation from upstream 8f11c33ac ("Enforce framethreads to 1
+     * for zerolatency tune"): the tune already DEFAULTS frameNumThreads to 1
+     * in param.cpp, but an explicit later --frame-threads N on the command
+     * line must win (4.1 semantics).  The upstream post-parse override here
+     * silently discarded the user's explicit setting, costing ~23% wall on
+     * Pi 5 at the 4t real-time config.  Users who want true zero latency
+     * simply don't pass --frame-threads. */
 
     bool allowPools = !strlen(p->numaPools) || strcmp(p->numaPools, "none");
 
