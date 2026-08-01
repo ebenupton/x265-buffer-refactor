@@ -69,3 +69,25 @@ Bit-exact at every phase (this campaign is data-movement only; any
 change that would alter decisions is out of scope). Target: recover
 2-3% of the ~3.8% churn family at 1t, with the usual honest rejection
 of any phase that relocates rather than removes cost.
+
+## A4 resolved: no-action, mechanism identified (2026-08-01 night)
+
+perf annotate puts 82% of initCTU's self time on two loads at function
+entry immediately following a blr return - the banked skid lesson
+applies: the cost belongs to the preceding m_partSet(m_qp) broadcast
+and the object-header loads, i.e. **first-touch RFO misses on the CTU's
+CUData object + charBuf lines at frame start** (the per-frame picCTU
+array is ~4MB - nothing survives 33ms between frames). The init diet
+was already done in an earlier phase (bNeedPartInit gate); what remains
+is compulsory cold-touch traffic, not work. Writing fewer bytes to the
+same lines saves nothing (the RFO is per-line); the m_qp broadcast is
+one line and is required pre-commit (topSkipMinDepth).
+
+Consequences for the campaign:
+- A1 similarly capped: candidate CUData live in TLD (warm, reused per
+  CU) so initSubCU's 0.53% IS real copy work - but the fix is A2's
+  "don't re-init per candidate", not a smaller init.
+- copyToPic's 1.57% likewise includes the symmetric cold-RFO share on
+  commit; the shrinkable part is only the bytes whose lines would not
+  otherwise be touched (A5 census must count LINES, not bytes).
+- A2 remains the payload. A3 unassessed.
