@@ -103,8 +103,9 @@ Phases 13–17 validation (2026-08-01): bit-exact vs the pre-Phase-13 tree on
 the 90 s clip at all three gate configs, and bit-exact on the recommended
 config at 1t and 4t. On the recommended config the sweep is worth
 **−3.5 % cycles at 1t and −3.1 % at 4t** (interleaved pairs) — larger than
-on the base config, so the 4 Mbps reference point picks up roughly another
-+1 fps.
+on the base config. Measured at the reference operating point (recommended
+config, 4 Mbps, 4t, 90 s clip): **35.4–35.5 fps (1.18× realtime)**, up from
+35.0 pre-sweep.
 
 ### vs 10 Mbps H.264
 

@@ -214,6 +214,15 @@ pairs) — the commit-time record fills (two per CTU at rd≤1, since
 into the hottest loop, outweighing the read-side line compression. Dead
 in all three forms; do not revisit without a metadata-layout change.
 
+**Lowres margin shrink — rejected on correctness**
+(`phase18c-lowres-margin-rejected.patch`). Shrinking the lowres border
+extension 48→32 was "proved" safe from the lookahead's search-bound clamp
+(±cuSize+8), but the encoder crashed the gate: `estimateCUCost` probes
+*neighbour-MV candidates unclamped* before the bounded search, so reads
+beyond 32 do occur. A reminder that read-bound proofs must cover every
+probe path, not just the clamped search; the dead-store margin work
+(~0.3 G) stays as priced safety.
+
 **Closing state of the sweep (Phases 13–17).** Cumulative ≈ −5.5 % at
 1t, every cut bit-exact at the three gate configs. Of eleven
 experiments, six kept and five rejected with post-mortems. The remaining
