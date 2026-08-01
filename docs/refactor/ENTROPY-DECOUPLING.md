@@ -72,3 +72,20 @@ copy_count). encodeBin+codeCoeffNxN = ~4.5-6.6% self here. Credible
 1-2% total win from an x264-grade engine (or templated
 counting/writing split killing the per-bin branch), and it shrinks the
 E1b trailing chain - directly serves the 30fps@ft1 goal.
+
+### E1a economics at ft1 (bbb, rec config, 3 interleaved pairs)
+
+| | inline | defer (serial tail) |
+|---|---|---|
+| wall | 25.2-25.5s (35.3-35.7 fps) | 28.6s (31.4-31.5 fps) |
+| cycles | 174.3-176.2G | 179.4-179.8G (+3.1%) |
+| CPUs busy | 2.87-2.88 | 2.61-2.62 |
+
+The +4.8G is the duplicated context pass + re-encode; the 3.3s wall
+regression is exactly the single-threaded encodeSlice tail (~11% of
+wall). E1b folds that tail into the 1.1 idle cores as trailing row
+tasks (idle capacity ~28 core-seconds vs ~8 needed - fits easily).
+Expected E1b at ft1: +3-4% wall vs inline. NOT sufficient alone for
+30fps-everywhere: the ladder is E1b (fill stalls) -> E2 (approximate
+estimation contexts -> 1-CTU analysis stagger, the big utilization
+lever) -> CABAC phases A/B/C (shrink both chains, see CABAC-DESIGN.md).
