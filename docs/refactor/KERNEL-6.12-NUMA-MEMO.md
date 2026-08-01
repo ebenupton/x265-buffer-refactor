@@ -117,3 +117,27 @@ NUMA but WITHOUT banklow — its absolute walls are stale on both counts
 now, but its interleaved up/down deltas remain valid. Corpus re-run on
 the banklow boot is the obvious next step if corpus-absolute numbers
 are wanted.
+
+## PGO+BOLT layer on the banklow boot (2026-08-01 evening)
+
+Full pipeline rebuilt on this boot (previous layer was BOLT-only):
+gcc-12 `-fprofile-generate/-fprofile-update=atomic` trained on bbb_30s at
+the 1t DM and 4t recommended configs, `-fprofile-use -fprofile-correction`
+rebuild with `-Wl,--emit-relocs`, fresh cycles:u profile (bbb_90s, both
+configs) fed to llvm-bolt-21 with the bolt-artifacts/README recipe.
+`dm-gate.sh` passes on both the PGO build and the BOLTed library;
+corpus 12/12 bit-exact vs pristine upstream.
+
+Interleaved same-session A/B vs plain install-refactor (banklow boot):
+30s 4t **-3.0% wall / -3.0% cycles** (41.0 -> 42.2 fps, 183.7 G);
+90s 4t -2.4% wall (41.9 fps); 30s 1t DM -2.6% wall. Compiler PGO adds
+~1 pp over the historic BOLT-only layer (-1.4/-2.1%).
+
+Corpus (results-pgobolt.csv / corpus-results-2026-08-01-banklow-pgobolt.csv):
+down-vs-up geomean **+17.2%** (range +15.0..+19.0), abs geomean 33.0 fps;
+cross-batch PGO+BOLT vs plain refactor +4.2% with upstream drift +0.7%.
+Artifacts: install-refactor-pgobolt/ (libx265.so.215 = BOLTed,
+.prebolt = PGO-only), build-pgo/, pgo-data/.
+
+Combined day: 35.9 fps (no-NUMA, plain) -> 42.2 fps (banklow+fake8+
+interleave+PGO+BOLT) = **+17.5% wall on bbb 30s 4t; 1.41x realtime.**
