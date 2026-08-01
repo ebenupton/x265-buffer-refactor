@@ -64,23 +64,19 @@ template<int width>
 void intra_pred_ang_neon(pixel *dst, intptr_t dstStride, const pixel *srcPix0, int dirMode, int bFilter)
 {
     int width2 = width << 1;
-    // Flip the neighbours in the horizontal case.
+    /* A76 rework (2026-08-01): the horizontal-mode neighbour flip used to be
+     * materialised into a stack buffer (two memcpys per call, repeated for
+     * each of the 17 horizontal modes) whose narrow reloads defeated
+     * store-to-load forwarding - perf annotate showed the buffer store alone
+     * at 15% of the function.  The flip is just a role swap of the top and
+     * left segments around an invariant corner pixel, so read through two
+     * segment pointers instead:
+     *   srcTop[k]           = post-flip top[k],  k in [1, width2]
+     *   srcLeft[width2 + j] = post-flip left[j], j in [1, width2]
+     * Bit-exact: identical values are read, nothing is copied. */
     int horMode = dirMode < 18;
-    pixel neighbourBuf[129];
-    const pixel *srcPix = srcPix0;
-
-    if (horMode)
-    {
-        neighbourBuf[0] = srcPix[0];
-        //for (int i = 0; i < width << 1; i++)
-        //{
-        //    neighbourBuf[1 + i] = srcPix[width2 + 1 + i];
-        //    neighbourBuf[width2 + 1 + i] = srcPix[1 + i];
-        //}
-        memcpy(&neighbourBuf[1], &srcPix[width2 + 1], sizeof(pixel) * (width << 1));
-        memcpy(&neighbourBuf[width2 + 1], &srcPix[1], sizeof(pixel) * (width << 1));
-        srcPix = neighbourBuf;
-    }
+    const pixel *srcTop  = horMode ? srcPix0 + width2 : srcPix0;
+    const pixel *srcLeft = horMode ? srcPix0 - width2 : srcPix0;
 
     // Intra prediction angle and inverse angle tables.
     const int8_t angleTable[17] = { -32, -26, -21, -17, -13, -9, -5, -2, 0, 2, 5, 9, 13, 17, 21, 26, 32 };
@@ -95,14 +91,14 @@ void intra_pred_ang_neon(pixel *dst, intptr_t dstStride, const pixel *srcPix0, i
     {
         for (int y = 0; y < width; y++)
         {
-            memcpy(&dst[y * dstStride], srcPix + 1, sizeof(pixel)*width);
+            memcpy(&dst[y * dstStride], srcTop + 1, sizeof(pixel)*width);
         }
         if (bFilter)
         {
-            int topLeft = srcPix[0], top = srcPix[1];
+            int topLeft = srcPix0[0], top = srcTop[1];
             for (int y = 0; y < width; y++)
             {
-                dst[y * dstStride] = x265_clip((int16_t)(top + ((srcPix[width2 + 1 + y] - topLeft) >> 1)));
+                dst[y * dstStride] = x265_clip((int16_t)(top + ((srcLeft[width2 + 1 + y] - topLeft) >> 1)));
             }
         }
     }
@@ -125,19 +121,17 @@ void intra_pred_ang_neon(pixel *dst, intptr_t dstStride, const pixel *srcPix0, i
             for (int i = 0; i < nbProjected; i++)
             {
                 invAngleSum += invAngle;
-                ref_pix[- 2 - i] = srcPix[width2 + (invAngleSum >> 8)];
+                ref_pix[- 2 - i] = srcLeft[width2 + (invAngleSum >> 8)];
             }
 
             // Copy the top-left and top pixels.
-            //for (int i = 0; i < width + 1; i++)
-            //ref_pix[-1 + i] = srcPix[i];
-
-            memcpy(&ref_pix[-1], srcPix, (width + 1)*sizeof(pixel));
+            ref_pix[-1] = srcPix0[0];
+            memcpy(ref_pix, srcTop + 1, width * sizeof(pixel));
             ref = ref_pix;
         }
         else // Use the top and top-right neighbours.
         {
-            ref = srcPix + 1;
+            ref = srcTop + 1;
         }
 
         // Pass every row.
