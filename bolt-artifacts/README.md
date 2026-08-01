@@ -13,15 +13,19 @@ Bit-exact at 1t 5 Mbps, 1t 2 Mbps, and 4-thread real-time configs.
 
 ## Measured impact (perf stat, cycles:u)
 
-Baseline is refactor tree at commit `4289aab` on the local `x265-4.1-refactor` repo.
+Refreshed 2026-08-01 against the Phase-17 tree (`3221b1a`); profile from
+the 90 s clip at 1t + 4t, `--no-info` MD5 gate (so no version-tag pinning
+needed any more).
 
 |  config              | refactor cycles | BOLT cycles | Δ cycles |
 |----------------------|-----------------|-------------|----------|
-| 1t 5 Mbps LL         | 270,596 M       | 266,819 M   | **−1.40%** |
-| 4t 5 Mbps realtime   | 285,661 M       | 279,654 M   | **−2.10%** |
+| 1t 5 Mbps LL         | 167,337 M       | 165,823 M   | **−0.90%** |
+| 4t 5 Mbps realtime   | 212,120 M       | 210,487 M   | **−0.77%** |
 
-Wall-time deltas follow cycles (~−1 to −2%).
-Branch-misses drop 7–9 %; IPC lifts 1.36 → 1.38 (1t) and 1.28 → 1.31 (4t).
+(3/3 interleaved pairs each.)  Smaller than the −1.4/−2.1 % the layer gave
+on the pre-Phase-12 tree — the source-level sweep has since claimed much of
+the layout win BOLT used to find.  An earlier revision of this table
+(baseline `4289aab`) is superseded.
 
 ## Reproduction recipe
 
