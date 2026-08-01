@@ -41,16 +41,18 @@
 namespace X265_NS {
 
 /* Entropy-decoupling probe E1a: runtime switch, one binary for A/B. */
-static bool X265_DEFER_ENTROPY_ENABLED()
+static int X265_DEFER_ENTROPY_MODE()
 {
     static int v = -1;
     if (v < 0)
     {
         const char* e = getenv("X265_DEFER_ENTROPY");
-        v = (e && *e == '1') ? 1 : 0;
+        v = e ? (*e - '0') : 0;
+        if (v < 0 || v > 2) v = 0;
     }
-    return v == 1;
+    return v;   /* 0=inline, 1=counting wave + encodeSlice, 2=scratch wave + encodeSlice */
 }
+static bool X265_DEFER_ENTROPY_ENABLED() { return X265_DEFER_ENTROPY_MODE() >= 1; }
 void weightAnalyse(Slice& slice, Frame& frame, x265_param& param);
 
 FrameEncoder::FrameEncoder()
@@ -755,17 +757,29 @@ void FrameEncoder::compressFrame(int layer)
      * to real coding) and encodeSlice() regenerates the real substream bits
      * from committed CUData afterwards.  Bit-exact by construction if the
      * SAO deferred path is sound at no-SAO; the gate verifies. */
-    const bool bDeferEntropy = X265_DEFER_ENTROPY_ENABLED();
+    /* Diagnostic mode 2: wave rowCoders run REAL coding into scratch streams
+     * (output discarded); encodeSlice regenerates the emitted substreams.
+     * Isolates counting-mode context behavior from the encodeSlice path. */
+    const bool bDeferScratch = X265_DEFER_ENTROPY_MODE() == 2;
+    const bool bDeferEntropy = X265_DEFER_ENTROPY_MODE() == 1;
+    static Bitstream* s_scratchStreams = NULL;
+    if ((bDeferEntropy || bDeferScratch) && !s_scratchStreams)
+        s_scratchStreams = new Bitstream[numSubstreams];
     if (!m_outStreams)
     {
         m_outStreams = new Bitstream[numSubstreams];
         if (!m_param->bEnableWavefront)
             m_backupStreams = new Bitstream[numSubstreams];
         m_substreamSizes = X265_MALLOC(uint32_t, numSubstreams);
-        if (!slice->m_bUseSao && !bDeferEntropy)
+        if (!slice->m_bUseSao && !bDeferEntropy && !bDeferScratch)
         {
             for (uint32_t i = 0; i < numSubstreams; i++)
                 m_rows[i].rowGoOnCoder.setBitstream(&m_outStreams[i]);
+        }
+        else if (bDeferScratch)
+        {
+            for (uint32_t i = 0; i < numSubstreams; i++)
+                m_rows[i].rowGoOnCoder.setBitstream(&s_scratchStreams[i]);
         }
     }
     else
@@ -773,7 +787,12 @@ void FrameEncoder::compressFrame(int layer)
         for (uint32_t i = 0; i < numSubstreams; i++)
         {
             m_outStreams[i].resetBits();
-            if (!slice->m_bUseSao && !bDeferEntropy)
+            if (bDeferScratch)
+            {
+                s_scratchStreams[i].resetBits();
+                m_rows[i].rowGoOnCoder.setBitstream(&s_scratchStreams[i]);
+            }
+            else if (!slice->m_bUseSao && !bDeferEntropy)
                 m_rows[i].rowGoOnCoder.setBitstream(&m_outStreams[i]);
             else
                 m_rows[i].rowGoOnCoder.setBitstream(NULL);
@@ -1759,6 +1778,15 @@ void FrameEncoder::processRowEncoder(int intRow, ThreadLocalData& tld, int layer
         /* advance top-level row coder to include the context of this CTU.
          * if SAO is disabled, rowCoder writes the final CTU bitstream */
         rowCoder.encodeCTU(*ctu, m_cuGeoms[m_ctuGeomMap[cuAddr]]);
+        /* E1 fix: in counting mode encodeCTU's trailing resetBits keeps the
+         * sub-bit fracBits residue (&= 32767).  The real-mode rowCoder that
+         * analysis is otherwise seeded from carries fracBits == 0, and
+         * copyState() propagates m_fracBits into the RD coders - the
+         * fractional offset flips coin-flip RD decisions (first seen at
+         * poc4 row13 col103 on bbb).  Zero it so counting-mode seeding is
+         * bit-identical to real-mode seeding. */
+        if (X265_DEFER_ENTROPY_MODE() == 1)
+            rowCoder.m_fracBits = 0;
 
         if (m_param->bEnableWavefront && col == 1)
             // Save CABAC state for next row
@@ -2083,7 +2111,7 @@ void FrameEncoder::processRowEncoder(int intRow, ThreadLocalData& tld, int layer
 
     /* flush row bitstream (if WPP and no SAO) or flush frame if no WPP and no SAO */
     /* end_of_sub_stream_one_bit / end_of_slice_segment_flag */
-       if (!slice->m_bUseSao && !X265_DEFER_ENTROPY_ENABLED() &&
+       if (!slice->m_bUseSao && X265_DEFER_ENTROPY_MODE() != 1 &&
            (m_param->bEnableWavefront || bLastRowInSlice))
                rowCoder.finishSlice();
 

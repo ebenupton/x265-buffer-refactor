@@ -38,6 +38,7 @@
 
 namespace X265_NS {
 
+
 // initial probability for cu_transquant_bypass flag
 static const uint8_t INIT_CU_TRANSQUANT_BYPASS_FLAG[3][NUM_TQUANT_BYPASS_FLAG_CTX] =
 {

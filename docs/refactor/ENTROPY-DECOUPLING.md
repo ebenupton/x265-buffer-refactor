@@ -13,7 +13,28 @@ to real coding) and regenerates real bits in encodeSlice(). The probe
 enables that at no-SAO. One extra fork found (row-end finishSlice
 segfault - fixed with the same guard).
 
-### Status: mechanism VALIDATED, two issues characterized
+### Status (2026-08-02): E1a COMPLETE AND BIT-EXACT - full gate PASS
+### with defer enabled (byte-identical incl. ABR), inert when off.
+
+ROOT CAUSE of both issues below (found via per-CTU context checksum
+trace -> first divergence poc4/row13/col103, then scratch-mode
+diagnostic proving wave+encodeSlice individually correct): counting
+mode's per-CTU resetBits() keeps the sub-bit fracBits residue
+(m_fracBits &= 32767), while a real-mode rowCoder carries fracBits==0.
+copyState() propagates m_fracBits into the RD coders that
+compressCTU() seeds from rowCoder, so every bit-estimate in counting
+mode was offset by a fraction of a bit - flipping coin-flip RD
+decisions at rare CTUs (first with real inter residual content).
+FIX: zero rowCoder.m_fracBits after encodeCTU in counting mode
+(frameencoder.cpp). With decisions identical, the "flush delta" and
+ABR drift disappeared too - they were downstream of the decision
+drift, not independent. The batch cost estimators (costCoeffNxN,
+costC1C2Flag) were PROVEN exact along the way (forcing bin-by-bin
+counting changed nothing). The earlier recycle-depth/ref-count
+correlations were red herrings: frames 1-3 of bbb are near-empty
+(528 bits), so "frame 4" was simply the first frame with content.
+
+### Historical notes from the hunt (superseded by the above)
 
 1. Decode-neutral byte placement difference vs inline from frame 0
    (equal NAL sizes, equal decode, different bytes ~ trailing/flush
