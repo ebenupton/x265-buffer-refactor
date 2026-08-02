@@ -228,6 +228,7 @@ Entropy::Entropy()
     m_fracBits = 0;
     m_pad = 0;
     m_meanQP = 0;
+    m_bs = NULL;
     X265_CHECK(sizeof(m_contextState) >= sizeof(m_contextState[0]) * MAX_OFF_CTX_MOD, "context state table is too small\n");
 }
 
@@ -1885,7 +1886,7 @@ void Entropy::writeCoefRemainExGolomb(uint32_t codeNumber, uint32_t absGoRice)
 
         X265_CHECK(codeNumber - (length << absGoRice) == (codeNumber & ((1 << absGoRice) - 1)), "codeNumber failure\n");
         X265_CHECK(length + 1 + absGoRice < 32, "length failure\n");
-        encodeBinsEP((((1 << (length + 1)) - 2) << absGoRice) + codeRemain, length + 1 + absGoRice);
+        encodeBinsEPW((((1 << (length + 1)) - 2) << absGoRice) + codeRemain, length + 1 + absGoRice);
     }
     else
     {
@@ -1900,8 +1901,8 @@ void Entropy::writeCoefRemainExGolomb(uint32_t codeNumber, uint32_t absGoRice)
         }
         codeNumber = (codeNumber << absGoRice) + codeRemain;
 
-        encodeBinsEP((1 << (COEF_REMAIN_BIN_REDUCTION + length + 1)) - 2, COEF_REMAIN_BIN_REDUCTION + length + 1);
-        encodeBinsEP(codeNumber, length + absGoRice);
+        encodeBinsEPW((1 << (COEF_REMAIN_BIN_REDUCTION + length + 1)) - 2, COEF_REMAIN_BIN_REDUCTION + length + 1);
+        encodeBinsEPW(codeNumber, length + absGoRice);
     }
 }
 
@@ -2433,7 +2434,7 @@ void Entropy::codeCoeffNxN(const CUData& cu, const coeff_t* coeff, uint32_t absP
                         {
                             ctxSig = table_cnt[4][blkPos];
                             X265_CHECK(ctxSig == Quant::getSigCtxInc(patternSigCtx, log2TrSize, trSize, blkPos, bIsLuma, codingParameters.firstSignificanceMapContext), "sigCtx mistake!\n");;
-                            encodeBin(sig, baseCtx[ctxSig]);
+                            encodeBinW(sig, baseCtx[ctxSig]);
                         }
                         absCoeff[numNonZero] = tmpCoeff[blkPos];
                         numNonZero += sig;
@@ -2460,7 +2461,7 @@ void Entropy::codeCoeffNxN(const CUData& cu, const coeff_t* coeff, uint32_t absP
                             ctxSig = (cnt + posOffset) & posZeroMask;
 
                             X265_CHECK(ctxSig == Quant::getSigCtxInc(patternSigCtx, log2TrSize, trSize, codingParameters.scan[subPosBase + scanPosSigOff], bIsLuma, codingParameters.firstSignificanceMapContext), "sigCtx mistake!\n");;
-                            encodeBin(sig, baseCtx[ctxSig]);
+                            encodeBinW(sig, baseCtx[ctxSig]);
                         }
                         absCoeff[numNonZero] = tmpCoeff[blkPos];
                         numNonZero += sig;
@@ -2534,7 +2535,7 @@ void Entropy::codeCoeffNxN(const CUData& cu, const coeff_t* coeff, uint32_t absP
                 {
                     const uint32_t symbol1 = absCoeff[idx] > 1;
                     const uint32_t symbol2 = absCoeff[idx] > 2;
-                    encodeBin(symbol1, baseCtxMod[c1]);
+                    encodeBinW(symbol1, baseCtxMod[c1]);
 
                     if (symbol1)
                         c1Next = 0;
@@ -2554,11 +2555,11 @@ void Entropy::codeCoeffNxN(const CUData& cu, const coeff_t* coeff, uint32_t absP
                     baseCtxMod = &m_contextState[(bIsLuma ? 0 : NUM_ABS_FLAG_CTX_LUMA) + OFF_ABS_FLAG_CTX + ctxSet];
 
                     X265_CHECK((firstC2Flag <= 1), "firstC2FlagIdx check failure\n");
-                    encodeBin(firstC2Flag, baseCtxMod[0]);
+                    encodeBinW(firstC2Flag, baseCtxMod[0]);
                 }
 
                 const int hiddenShift = (bHideFirstSign && signHidden) ? 1 : 0;
-                encodeBinsEP((coeffSigns >> hiddenShift), numNonZero - hiddenShift);
+                encodeBinsEPW((coeffSigns >> hiddenShift), numNonZero - hiddenShift);
 
                 if (!c1 || numNonZero > C1FLAG_NUMBER)
                 {
@@ -2858,18 +2859,33 @@ void Entropy::resetBits()
         m_bitIf->resetBits();
 }
 
-/** Encode bin */
-void Entropy::encodeBin(uint32_t binValue, uint8_t &ctxModel)
+/* Phase A (CABAC-DESIGN.md): mode-split kernels.  encodeBinC/encodeBinW are
+ * ALWAYS_INLINE so codeCoeffNxN's loops keep the engine state in registers;
+ * the public encodeBin stays as the dispatcher for cold mixed callers. */
+
+__attribute__((always_inline))
+inline void Entropy::encodeBinC(uint32_t binValue, uint8_t &ctxModel)
+{
+    uint32_t mstate = ctxModel;
+    ctxModel = sbacNext(mstate, binValue);
+    m_fracBits += sbacGetEntropyBits(mstate, binValue);
+}
+
+__attribute__((always_inline))
+inline void Entropy::putByte(uint32_t byteValue)
+{
+    if (m_bs)
+        m_bs->writeByteFast(byteValue);
+    else
+        m_bitIf->writeByte(byteValue);
+}
+
+__attribute__((always_inline))
+inline void Entropy::encodeBinW(uint32_t binValue, uint8_t &ctxModel)
 {
     uint32_t mstate = ctxModel;
 
     ctxModel = sbacNext(mstate, binValue);
-
-    if (!m_bitIf)
-    {
-        m_fracBits += sbacGetEntropyBits(mstate, binValue);
-        return;
-    }
 
     uint32_t range = m_range;
     uint32_t state = sbacGetState(mstate);
@@ -2878,30 +2894,48 @@ void Entropy::encodeBin(uint32_t binValue, uint8_t &ctxModel)
 
     X265_CHECK(lps >= 2, "lps is too small\n");
 
-    int numBits = (uint32_t)(range - 256) >> 31;
+    /* Phase A v3: keep the original branchy MPS/LPS structure (the A76
+     * predictor handles the skew well and the MPS fast path stays minimal);
+     * the phase's value is the W/C split + inlining + devirtualised bytes. */
+    int numBits = (int)((uint32_t)(range - 256) >> 31);
     uint32_t low = m_low;
 
-    // NOTE: MPS must be LOWEST bit in mstate
-    X265_CHECK((uint32_t)((binValue ^ mstate) & 1) == (uint32_t)(binValue != sbacGetMps(mstate)), "binValue failure\n");
     if ((binValue ^ mstate) & 1)
     {
-        // NOTE: lps is non-zero and the maximum of idx is 8 because lps less than 256
-        //numBits = g_renormTable[lps >> 3];
         unsigned long idx;
         BSR(idx, lps);
         X265_CHECK(state != 63 || idx == 1, "state failure\n");
-
-        numBits = 8 - idx;
+        numBits = 8 - (int)idx;
         if (state >= 63)
             numBits = 6;
         X265_CHECK(numBits <= 6, "numBits failure\n");
-
         low += range;
         range = lps;
     }
     m_low = (low << numBits);
     m_range = (range << numBits);
     m_bitsLeft += numBits;
+
+    if (m_bitsLeft >= 0)
+        writeOut();
+}
+
+/** Encode bin (dispatcher) */
+void Entropy::encodeBin(uint32_t binValue, uint8_t &ctxModel)
+{
+    if (!m_bitIf)
+        encodeBinC(binValue, ctxModel);
+    else
+        encodeBinW(binValue, ctxModel);
+}
+
+__attribute__((always_inline))
+inline void Entropy::encodeBinEPW(uint32_t binValue)
+{
+    m_low <<= 1;
+    if (binValue)
+        m_low += m_range;
+    m_bitsLeft++;
 
     if (m_bitsLeft >= 0)
         writeOut();
@@ -2915,24 +2949,12 @@ void Entropy::encodeBinEP(uint32_t binValue)
         m_fracBits += 32768;
         return;
     }
-    m_low <<= 1;
-    if (binValue)
-        m_low += m_range;
-    m_bitsLeft++;
-
-    if (m_bitsLeft >= 0)
-        writeOut();
+    encodeBinEPW(binValue);
 }
 
-/** Encode equiprobable bins */
-void Entropy::encodeBinsEP(uint32_t binValues, int numBins)
+__attribute__((always_inline))
+inline void Entropy::encodeBinsEPW(uint32_t binValues, int numBins)
 {
-    if (!m_bitIf)
-    {
-        m_fracBits += 32768 * numBins;
-        return;
-    }
-
     while (numBins > 8)
     {
         numBins -= 8;
@@ -2952,6 +2974,17 @@ void Entropy::encodeBinsEP(uint32_t binValues, int numBins)
 
     if (m_bitsLeft >= 0)
         writeOut();
+}
+
+/** Encode equiprobable bins */
+void Entropy::encodeBinsEP(uint32_t binValues, int numBins)
+{
+    if (!m_bitIf)
+    {
+        m_fracBits += 32768 * numBins;
+        return;
+    }
+    encodeBinsEPW(binValues, numBins);
 }
 
 /** Encode terminating bin */
@@ -3002,12 +3035,12 @@ void Entropy::writeOut()
         {
             uint32_t carry = leadByte >> 8;
             uint32_t byteTowrite = m_bufferedByte + carry;
-            m_bitIf->writeByte(byteTowrite);
+            putByte(byteTowrite);
 
             byteTowrite = (0xff + carry) & 0xff;
             while (numBufferedBytes > 1)
             {
-                m_bitIf->writeByte(byteTowrite);
+                putByte(byteTowrite);
                 numBufferedBytes--;
             }
         }

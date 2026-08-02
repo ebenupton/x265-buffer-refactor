@@ -108,8 +108,8 @@ extern "C" const uint32_t PFX(entropyStateBits)[128];
 namespace X265_NS {
 // private namespace
 
-extern const uint32_t g_entropyBits[128];
-extern const uint8_t g_nextState[128][2];
+extern const uint32_t g_entropyBits[128] __attribute__((visibility("hidden")));
+extern const uint8_t g_nextState[128][2] __attribute__((visibility("hidden")));
 
 #define sbacGetMps(S)            ((S) & 1)
 #define sbacGetState(S)          ((S) >> 1)

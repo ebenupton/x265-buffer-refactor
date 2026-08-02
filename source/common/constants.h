@@ -85,7 +85,7 @@ extern const uint8_t g_lastCoeffTable[32];
 extern const uint8_t g_goRiceRange[5]; // maximum value coded with Rice codes
 
 // CABAC tables
-extern const uint8_t g_lpsTable[64][4];
+extern const uint8_t g_lpsTable[64][4] __attribute__((visibility("hidden")));
 extern const uint8_t x265_exp2_lut[64];
 
 // Intra tables

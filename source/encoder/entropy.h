@@ -112,10 +112,13 @@ public:
     uint64_t      m_fracBits;
     EstBitsSbac   m_estBitsSbac;
     double        m_meanQP;
+    /* Phase A2: concrete CABAC byte sink (== m_bitIf when it is a Bitstream).
+     * Config, not state: copyFrom/copyState leave it untouched. */
+    Bitstream*    m_bs;
 
     Entropy();
 
-    void setBitstream(Bitstream* p)    { m_bitIf = p; }
+    void setBitstream(Bitstream* p)    { m_bitIf = p; m_bs = p; }
 
     uint32_t getNumberOfWrittenBits()
     {
@@ -214,6 +217,16 @@ public:
      * getNumberOfWrittenBits() computed against this snapshot without the
      * 160-byte context restore (bit-counting mode only). */
     inline uint32_t bitsQtRootCbfZero() const { return bitsCodeBin(0, m_contextState[OFF_QT_ROOT_CBF_CTX]); }
+
+    /* Phase A1: mode-split CABAC kernels (definitions in entropy.cpp).
+     * W = real emission only (m_bitIf assumed non-NULL), C = counting only.
+     * Both begin with the identical context transition - the counting==real
+     * transition invariant is structural. */
+    inline void encodeBinW(uint32_t binValue, uint8_t& ctxModel);
+    inline void encodeBinC(uint32_t binValue, uint8_t& ctxModel);
+    inline void encodeBinEPW(uint32_t binValue);
+    inline void encodeBinsEPW(uint32_t binValues, int numBins);
+    inline void putByte(uint32_t byteValue);
 
 private:
 

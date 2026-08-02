@@ -68,6 +68,20 @@ public:
     ~Bitstream()                             { X265_FREE(m_fifo); }
 
     void     resetBits()                     { m_partialByteBits = m_byteOccupancy = 0; m_partialByte = 0; }
+
+    /* CABAC fast byte sink (Phase A2): non-virtual, inline append; falls back
+     * to push_back only on capacity boundary. */
+    void     writeByteFast(uint32_t val)
+    {
+        uint32_t occ = m_byteOccupancy;
+        if (m_fifo && occ < m_byteAlloc)
+        {
+            m_fifo[occ] = (uint8_t)val;
+            m_byteOccupancy = occ + 1;
+        }
+        else
+            push_back((uint8_t)val);
+    }
     uint32_t getNumberOfWrittenBytes() const { return m_byteOccupancy; }
     uint32_t getNumberOfWrittenBits()  const { return m_byteOccupancy * 8 + m_partialByteBits; }
     const uint8_t* getFIFO() const           { return m_fifo; }
