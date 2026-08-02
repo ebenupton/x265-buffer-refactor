@@ -141,3 +141,46 @@ reachable *entirely* by filling the 45% window - raising it from ~1.7 to
 
 NEXT: profile the 45% window (what runs between frame-encoder compress
 phases at ft1, and how parallel is it?) before writing any more code.
+
+## BREAKTHROUGH: the ft1 ceiling was serialized pre-lookahead (2026-08-02)
+
+Following the corrected diagnosis (the wave is 97% efficient; the idle
+cores are in the non-compress window), profiling that window found:
+
+`tune zerolatency` sets `lookaheadDepth = 0` -> `maxSearch = 1`
+(slicetype.cpp:1921-1922) -> `PreLookaheadGroup` receives exactly ONE
+frame (:1956) -> `tryBondPeers(pool, 1)` bonds no peers (:1968) -> the
+whole pre-lookahead (Lowres::init + lowresIntraEstimate, **8.4% of all
+cycles**) runs single-threaded on the API thread while the four pool
+workers sit idle waiting for the decided picture.
+
+Giving the stage more frames to work on in parallel (`--rc-lookahead 4`)
+is, at this configuration, a **pure parallelism knob**:
+
+- bbb 300f ft1: **32.24 -> 38.84 fps (+20.5%)**, output **byte-identical**.
+- Control at `--pools 1`: 13.49 -> 13.25 fps, i.e. the gain vanishes
+  without workers to bond. It is parallelism, not rate control.
+- Corpus, 12 seqs, ft1, la0 vs la4: **+18.2% geomean, 12/12
+  bit-identical**; sequences >= 30 fps go from **5/12 to 11/12**
+  (riverbed 27.35 the lone holdout; min 23.89 -> 27.35).
+
+Why bit-identical: with bframes 0, no-scenecut and cuTree off (all
+implied by zerolatency), lookahead depth feeds no decision - it only
+determines how many frames the pre-analysis group can process at once.
+
+### Two ways to bank it
+
+1. **Config**: ship `--rc-lookahead 4` for this profile. Free +18%,
+   costs 4 frames of buffering latency (~130 ms at 30 fps) - acceptable
+   for file/VOD, not for a true zero-latency pipeline.
+2. **Code (preferred)**: parallelise ONE frame's pre-lookahead across
+   CTU rows inside PreLookaheadGroup, so the same 4-wide parallelism is
+   available with lookaheadDepth 0 and zero added latency.
+   lowresIntraEstimate (slicetype.cpp:704) walks lowres CUs
+   independently per row - a row-split bonded group is a contained
+   change. THIS IS THE NEXT PIECE OF WORK.
+
+Note: `--csv-log-level 2` itself costs ~22% (26.28 vs 32.24 fps on the
+same build) - the earlier "45% window / 1.7 cores" split was measured
+under that distortion. Direction correct, magnitudes overstated; honest
+ft1 baseline is 32.24 fps.
