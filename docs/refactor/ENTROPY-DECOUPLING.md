@@ -184,3 +184,36 @@ Note: `--csv-log-level 2` itself costs ~22% (26.28 vs 32.24 fps on the
 same build) - the earlier "45% window / 1.7 cores" split was measured
 under that distortion. Direction correct, magnitudes overstated; honest
 ft1 baseline is 32.24 fps.
+
+## Row-parallel pre-lookahead: IMPLEMENTED AND KEPT (49ee2938d)
+
+Splits ONE frame's lowresIntraEstimate across CTU-row ranges into a
+bonded group whenever PreLookaheadGroup has no frame-level parallelism
+to exploit (i.e. lookaheadDepth 0). Rows are independent; the two
+frame-level accumulators are summed per job. Falls back to the serial
+path if peers cannot be bonded.
+
+- bbb 300f ft1: 32.15/34.13 -> 37.31/38.12 fps; cycles 60.5G and
+  instructions 104.4G UNCHANGED; output bit-identical.
+- Corpus ft1, like-for-like (both plain builds): **28.42 -> 30.83
+  geomean = +8.5%**, 12/12 bit-identical, **>=30 fps 3/12 -> 7/12**.
+- Zero added latency (contrast --rc-lookahead 4: +18% but 4 frames of
+  input buffering).
+
+### REJECTED: parallelising the lowres plane generation
+(lowres-plane-parallel-rejected.patch; row-band split of
+primitives.frameInitLowres inside Lowres::init, bit-exact, gate PASS)
+
+bbb ft1 fell to 32.76-33.43 fps from 37.31-38.12 - an ~11% REGRESSION
+versus row-parallel alone. Mechanism: at ft1 the pool is NOT idle while
+pre-lookahead runs; it is executing the *previous* frame's wave. Bonding
+peers therefore steals workers from the wave, which is only worth it if
+the stolen work is large enough to amortise the wake and shorten the
+critical path. lowresIntraEstimate qualifies (it is the thing the frame
+encoder waits on, and each row band is substantial); the plane bands are
+~0.5 ms each and the trade goes negative. Two bonded groups per frame
+also doubles the wake traffic.
+
+Lesson: on a saturated 4-core pool, "parallelise the serial stage" only
+pays for the stage that is actually on the critical path, and only when
+per-job work exceeds the bonding overhead. Measure each stage separately.
