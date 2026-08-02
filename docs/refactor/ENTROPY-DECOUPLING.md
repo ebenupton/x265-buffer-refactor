@@ -217,3 +217,68 @@ also doubles the wake traffic.
 Lesson: on a saturated 4-core pool, "parallelise the serial stage" only
 pays for the stage that is actually on the critical path, and only when
 per-job work exceeds the bonding overhead. Measure each stage separately.
+
+## MEASURED: where bbb drops below 4 runnable threads (2026-08-02)
+
+Method: `perf stat -e cycles:u -I 20` for a time-resolved utilisation
+curve (CPUs = cycles / 2.4GHz / interval), plus `perf record -F 2000`
+with per-sample timestamps bucketed at 20 ms to attribute each bucket's
+idle core-time to whatever was running concurrently. bbb 150 frames,
+ft1, rec config, final row-parallel PGO+BOLT build. Cross-checked with
+task-clock (3.08 CPUs) and /usr/bin/time (310% CPU) - three independent
+methods agree.
+
+### It is a continuous deficit, not a stall
+
+| threshold | % of wall below it |
+|---|---|
+| < 3.8 CPUs | 92.2% |
+| < 3.5 | 83.9% |
+| < 3.0 | 47.2% |
+| < 2.5 | 15.1% |
+| < 2.0 | 5.5% |
+| < 1.5 | 1.4% |
+
+Mean 2.99-3.12 CPUs; **25.3% of available core-seconds idle**. There is
+no deep trough to fix: we sit ~1 core short essentially all the time.
+
+### The idle time belongs to the WAVE, not to lookahead or serial phases
+
+Idle core-seconds attributed by concurrent activity (3.90 s total):
+
+| what was running while cores sat idle | share |
+|---|---|
+| **ENCODE (wave kernels)** | **87.5%** |
+| SYNC/ATOMIC (cas/swp/pthread) | 6.6% |
+| LOOKAHEAD | 5.8% |
+
+Symbols in sub-3.0-CPU buckets are the ordinary wave: sa8d_16x16 6.0%,
+dct16 5.5%, quant 3.3%, satd8 3.1%, intra_pred_ang 3.1%, codeCoeffNxN
+3.1%, motionEstimate 2.4% - i.e. **the same mix as the busy buckets**.
+Lookahead is 6.4% of samples in low buckets vs 4.6% overall: barely
+enriched, so it is not the culprit even after the row-parallel fix.
+
+This CORRECTS the earlier csv-log-level-2 reading (avgWPP 3.87/4 "during
+compression"): that metric is sampled per completed CTU and so is biased
+toward busy periods, and the CSV path itself cost ~22%.
+
+### Mechanism: fine-grained blocking, not a phase
+
+Context switches (/usr/bin/time): ft1 8210 voluntary + 2798 involuntary
+in 4.36 s = ~2500/s, on a 4-thread pool doing ~34 frames/s x 68 rows.
+That is the wave's row-blocking (measured 103 row-blocks/frame) turning
+into sleep/wake churn: a worker hits the 2-column stagger limit,
+abandons the row, finds nothing ready, sleeps, and is re-woken
+microseconds later. ft4 has 9665 + 9115 switches (~4600/s) - more churn
+but better occupancy (3.50 CPUs), consistent with frames providing
+alternative ready work.
+
+### Consequence
+
+The remaining ~1 idle core cannot be recovered by moving a *phase* off
+the critical path - there is no phase. It requires either (a) more
+ready work at every instant (frame threading does this and costs 6%
+cycles; ft1la4 does it in the lookahead only), or (b) reducing the
+frequency of row-blocking - i.e. attacking CTU cost variance or the
+stagger's slack, or (c) cutting wake latency (spin-then-sleep in the
+pool before parking). (c) is untested and cheap to try.
