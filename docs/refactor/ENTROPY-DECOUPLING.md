@@ -445,3 +445,40 @@ and the API thread simply waits longer. Closing the last 1.4% would
 require letting the async path batch several queued frames into one
 PreLookaheadGroup (frame-level parallelism at bounded latency) - the
 obvious next change if that 1.4% is judged worth it.
+
+### CORRECTION: two mechanism claims measured and refuted (2026-08-02)
+
+Both explanations offered for the async2-vs-la4 residual were wrong.
+Measured with an instrumented PreLookaheadGroup (histogram of m_jobTotal,
+i.e. frames handed to the group per invocation), crowd_run:
+
+| mode | jobTotal histogram |
+|---|---|
+| async2 | **1:600** (every invocation = 1 frame) |
+| la4 | **1:396, 4:4** (four 4-frame invocations at startup, then 1) |
+
+**Claim (a) "la4 wins via 4-wide frame-level parallelism in
+pre-analysis" is FALSE.** In steady state la4 also processes ONE frame
+per group - identical width to async2, and both then use the
+row-parallel split. The 4-frame batches occur only while the queue
+initially fills.
+
+**Claim (b) "deeper async buffering regresses" is FALSE - it was my own
+build artifact.** The installed PGO+BOLT library was compiled while the
+knob was capped at `v > 2 -> v = 0`, so X265_ASYNC_LA=4 on that binary
+silently meant async OFF. Confirmed: installed build gives async0=28.11,
+async2=29.40, async4=27.70 (~= async0). On a build with the cap raised,
+blue_sky measures async2 29.12 / async3 29.16 / async4 29.37 / async6
+29.16 / la4 29.39 - i.e. flat, exactly as the code implies (m_filled is
+sticky, so beyond the threshold the steady state is identical).
+
+**What the residual 1.4% actually is - best supported explanation, with
+its evidence and its limits:** queue slack, not width. la4 keeps ~4
+frames queued (fullQueueSize 4) so a decide can start the instant the
+previous finishes, absorbing per-frame variance; async2 keeps ~1-2.
+Supporting evidence: dips below 2.5 CPUs are 0.55/frame at async2 vs
+0.38/frame at la4. Consistent but NOT decisive - a direct test would
+instrument time-blocked-in-getDecidedPicture per frame in each mode.
+Note also the gap appears on the PGO+BOLT build (-1.4%) but is within
+noise on the plain build (29.12 vs 29.39), consistent with slack
+mattering more once frames encode faster - also unproven.

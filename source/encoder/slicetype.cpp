@@ -95,7 +95,7 @@ static int asyncLookahead()
     {
         const char* e = getenv("X265_ASYNC_LA");
         v = e ? (*e - '0') : 0;
-        if (v < 0 || v > 2) v = 0;
+        if (v < 0 || v > 8) v = 0;
     }
     return v;   /* 0 = off; else = frames the input queue must hold */
 }
