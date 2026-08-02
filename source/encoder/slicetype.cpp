@@ -703,6 +703,15 @@ void LookaheadTLD::calcAdaptiveQuantFrame(Frame *curFrame, x265_param* param)
 
 void LookaheadTLD::lowresIntraEstimate(Lowres& fenc, uint32_t qgSize)
 {
+    int costEst = 0, costEstAq = 0;
+    lowresIntraEstimateRows(fenc, qgSize, 0, heightInCU, costEst, costEstAq);
+    fenc.costEst[0][0] = costEst;
+    fenc.costEstAq[0][0] = costEstAq;
+}
+
+void LookaheadTLD::lowresIntraEstimateRows(Lowres& fenc, uint32_t qgSize, int rowStart, int rowEnd,
+                                           int& costEstOut, int& costEstAqOut)
+{
     ALIGN_VAR_32(pixel, prediction[X265_LOWRES_CU_SIZE * X265_LOWRES_CU_SIZE]);
     pixel fencIntra[X265_LOWRES_CU_SIZE * X265_LOWRES_CU_SIZE];
     pixel neighbours[2][X265_LOWRES_CU_SIZE * 4 + 1];
@@ -721,7 +730,7 @@ void LookaheadTLD::lowresIntraEstimate(Lowres& fenc, uint32_t qgSize)
 
     int costEst = 0, costEstAq = 0;
 
-    for (int cuY = 0; cuY < heightInCU; cuY++)
+    for (int cuY = rowStart; cuY < rowEnd; cuY++)
     {
         fenc.rowSatds[0][0][cuY] = 0;
 
@@ -808,8 +817,8 @@ void LookaheadTLD::lowresIntraEstimate(Lowres& fenc, uint32_t qgSize)
         }
     }
 
-    fenc.costEst[0][0] = costEst;
-    fenc.costEstAq[0][0] = costEstAq;
+    costEstOut = costEst;
+    costEstAqOut = costEstAq;
 }
 
 uint32_t LookaheadTLD::weightCostLuma(Lowres& fenc, Lowres& ref, WeightParam& wp)
@@ -1735,6 +1744,29 @@ void LookaheadTLD::collectPictureStatistics(Frame *curFrame)
     curFrame->m_lowres.bHistScenecutAnalyzed = false;
 }
 
+void LowresIntraRowGroup::processTasks(int workerThreadID)
+{
+    if (workerThreadID < 0)
+        workerThreadID = m_lookahead.m_pool ? m_lookahead.m_pool->m_numWorkers : 0;
+    LookaheadTLD& tld = m_lookahead.m_tld[workerThreadID];
+
+    m_lock.acquire();
+    while (m_jobAcquired < m_jobTotal)
+    {
+        int job = m_jobAcquired++;
+        m_lock.release();
+
+        int rowStart = job * m_rowsPerJob;
+        int rowEnd = X265_MIN(rowStart + m_rowsPerJob, m_heightInCU);
+        if (rowStart < rowEnd)
+            tld.lowresIntraEstimateRows(*m_fenc, m_qgSize, rowStart, rowEnd,
+                                        m_costEst[job], m_costEstAq[job]);
+
+        m_lock.acquire();
+    }
+    m_lock.release();
+}
+
 void PreLookaheadGroup::processTasks(int workerThreadID)
 {
     if (workerThreadID < 0)
@@ -1755,7 +1787,45 @@ void PreLookaheadGroup::processTasks(int workerThreadID)
         if (m_lookahead.m_param->bHistBasedSceneCut)
             tld.collectPictureStatistics(preFrame);
 
-        tld.lowresIntraEstimate(preFrame->m_lowres, m_lookahead.m_param->rc.qgSize);
+        /* Row-parallel intra estimate when this group has no frame-level
+         * parallelism left to exploit (the zerolatency case: one frame in,
+         * pool otherwise idle).  Falls back to the serial path whenever
+         * peers cannot be bonded, so behaviour is identical either way. */
+        bool bRowParallel = false;
+        if (m_lookahead.m_pool && m_jobTotal == 1)
+        {
+            LowresIntraRowGroup rows(m_lookahead);
+            rows.m_fenc = &preFrame->m_lowres;
+            rows.m_qgSize = m_lookahead.m_param->rc.qgSize;
+            rows.m_heightInCU = tld.heightInCU;
+
+            int maxJobs = X265_MIN((int)LowresIntraRowGroup::MAX_ROW_JOBS,
+                                   m_lookahead.m_pool->m_numWorkers + 1);
+            maxJobs = X265_MIN(maxJobs, tld.heightInCU);
+            if (maxJobs > 1)
+            {
+                rows.m_rowsPerJob = (tld.heightInCU + maxJobs - 1) / maxJobs;
+                rows.m_jobTotal = (tld.heightInCU + rows.m_rowsPerJob - 1) / rows.m_rowsPerJob;
+                for (int i = 0; i < rows.m_jobTotal; i++)
+                    rows.m_costEst[i] = rows.m_costEstAq[i] = 0;
+
+                rows.tryBondPeers(*m_lookahead.m_pool, rows.m_jobTotal - 1);
+                rows.processTasks(workerThreadID);
+                rows.waitForExit();
+
+                int costEst = 0, costEstAq = 0;
+                for (int i = 0; i < rows.m_jobTotal; i++)
+                {
+                    costEst += rows.m_costEst[i];
+                    costEstAq += rows.m_costEstAq[i];
+                }
+                preFrame->m_lowres.costEst[0][0] = costEst;
+                preFrame->m_lowres.costEstAq[0][0] = costEstAq;
+                bRowParallel = true;
+            }
+        }
+        if (!bRowParallel)
+            tld.lowresIntraEstimate(preFrame->m_lowres, m_lookahead.m_param->rc.qgSize);
         preFrame->m_lowresInit = true;
 
         m_lock.acquire();

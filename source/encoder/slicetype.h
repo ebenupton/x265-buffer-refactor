@@ -136,6 +136,9 @@ struct LookaheadTLD
     void calcAdaptiveQuantFrame(Frame *curFrame, x265_param* param);
     void calcFrameSegment(Frame *curFrame);
     void lowresIntraEstimate(Lowres& fenc, uint32_t qgSize);
+    /* row-range worker behind lowresIntraEstimate; [rowStart, rowEnd) */
+    void lowresIntraEstimateRows(Lowres& fenc, uint32_t qgSize, int rowStart, int rowEnd,
+                                 int& costEst, int& costEstAq);
 
     void weightsAnalyse(Lowres& fenc, Lowres& ref);
     void xPreanalyze(Frame* curFrame);
@@ -263,6 +266,36 @@ protected:
     /*Compute index for positioning B-Ref frames*/
     void     placeBref(Frame** frames, int start, int end, int num, int *brefs);
     void     compCostBref(Lowres **frame, int start, int end, int num);
+};
+
+/* Splits ONE frame's lowres intra estimate across CTU-rows so the stage is
+ * parallel even at lookaheadDepth 0 (tune zerolatency), where PreLookaheadGroup
+ * has a single frame and would otherwise run single-threaded on the API thread
+ * while the pool idles.  Rows are independent: every write is indexed by
+ * cuXY/cuY and every read comes from the input lowres plane; the only shared
+ * state is the two frame-level cost accumulators, summed per job here. */
+class LowresIntraRowGroup : public BondedTaskGroup
+{
+public:
+
+    enum { MAX_ROW_JOBS = MAX_POOL_THREADS };
+
+    Lookahead&  m_lookahead;
+    Lowres*     m_fenc;
+    uint32_t    m_qgSize;
+    int         m_rowsPerJob;
+    int         m_heightInCU;
+    int         m_costEst[MAX_ROW_JOBS];
+    int         m_costEstAq[MAX_ROW_JOBS];
+
+    LowresIntraRowGroup(Lookahead& l) : m_lookahead(l), m_fenc(NULL), m_qgSize(0),
+                                        m_rowsPerJob(1), m_heightInCU(0) {}
+
+    void processTasks(int workerThreadID);
+
+protected:
+
+    LowresIntraRowGroup& operator=(const LowresIntraRowGroup&);
 };
 
 class PreLookaheadGroup : public BondedTaskGroup
