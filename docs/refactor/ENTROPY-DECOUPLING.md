@@ -517,3 +517,47 @@ real, but its mechanism is NOT explained by width, blocking, or priority.
 sequence-dependent, sometimes reversed, and costs 5 fewer frames of
 latency than the alternative. Remaining untested idea: the wake
 threshold (fire tryWakeOne at N rather than every addPicture).
+
+### Worker starvation of pre-analysis: CONFIRMED, fix attempt failed
+
+Eben's follow-up: doesn't the priority inversion let others steal workers
+from pre-analysis? Measured with bond-count instrumentation (crowd_run,
+500 frames) - the answer is yes, in a specific form:
+
+| | asks | got 0 | got 1 | got 2 | got 3 | mean peers |
+|---|---|---|---|---|---|---|
+| async2 row group | 4 | **277 (69%)** | 48 | 60 | 15 | **0.53** |
+| la4 row group | 4 | 186 (46%) | 88 | 122 | 4 | **0.86** |
+
+**The row-parallel pre-analysis asks for 4 helpers and gets ZERO on 69%
+of frames under async2** - i.e. the ROWP optimisation is inactive for
+most frames, precisely when the wave is busy. la4 gets 62% more helpers,
+which is a measured mechanism for its residual advantage.
+
+The route is not preemption (a bonded worker runs processTasks to
+completion). It is that `tryBondPeers` -> `tryAcquireSleepingThread`
+can only recruit workers that are ALREADY ASLEEP (threadpool.cpp:248),
+and the wave rarely leaves any. Pre-analysis never gets to compete.
+
+**Fix attempted and REVERTED**: publish the row bands through
+`Lookahead::findJob` so scan-arriving workers can migrate to them, plus
+`m_sliceType = 0` so the provider outranks frame encoders (this is the
+configuration in which priority would finally mean something).
+
+- v1 (spin-wait to protect the stack-allocated group's lifetime):
+  bit-exact but **-4.2% crowd_run, -2.7% blue_sky** - the busy-wait
+  costs a whole core of a four-core machine.
+- v2 (blocking wait on a done-counter): **CORRECTNESS BUG** - output
+  md5 changed (eba9df60 vs 30832bca). Race: `m_rowDone` is reset for
+  frame N+1 while a straggler helper from frame N is still incrementing
+  it, so the master's completion count is wrong and it sums partial
+  accumulators. Reverted; tree re-verified gate-clean.
+
+A correct version needs generation-tagged work publication (or a group
+owned by the Lookahead with a proper barrier) so stale helpers cannot
+corrupt the next frame's counters. That is a real piece of concurrency
+work, justified only if the ~1.4% (or the 69% starvation it implies) is
+judged worth it. The starvation finding stands on its own and is the
+most actionable thing here: any future attempt should target *giving
+pre-analysis workers when the wave is saturated*, which bonding
+structurally cannot do.
