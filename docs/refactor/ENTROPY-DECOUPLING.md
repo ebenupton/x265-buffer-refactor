@@ -338,3 +338,45 @@ already available (file/VOD encoding). In a live capture pipeline frame
 N+1 does not exist while N encodes, so the 5 ms is irreducible there -
 and the row-parallel fix (which shortens rather than removes the wait)
 is exactly the right tool for that case. The two are complementary.
+
+## LIVE SOURCE: which results survive (2026-08-02)
+
+Constraint: frame N+1 does not exist while N encodes, and buffering is
+latency. That invalidates the biggest win measured today.
+
+**Off the table for live:**
+- `--rc-lookahead >= 1` (+9.3%): its mechanism is async execution of
+  pre-analysis for a frame that has ALREADY arrived. With a live source
+  there is nothing to run ahead on, and the queue threshold is latency.
+- `--frame-threads > 1` (+6%): adds ft frames of pipeline latency and
+  costs 6% cycles (C2C step change). ft1 is mandated.
+
+**Still valid for live:**
+- Row-parallel pre-lookahead (49ee2938d): +8.5% corpus, bit-exact, zero
+  latency. It makes the critical-path pre-analysis *faster* rather than
+  moving it - the only legal move here. This is the day's main result
+  for a live pipeline.
+- Everything upstream: banklow/NUMA (+14%), the refactor (-20% vs ToT),
+  CABAC phase A, PGO+BOLT.
+
+**Live scorecard, ft1 + rc-lookahead 0, vs a 33.3 ms budget:**
+
+| | fps | ms/frame |
+|---|---|---|
+| best (park_joy) | 36.41 | 27.5 |
+| geomean | 31.63 | 31.6 |
+| worst (riverbed) | 25.31 | 39.5 |
+
+**9/12 sequences sustain 1080p30 live**; misses are riverbed (-15.6%),
+blue_sky (-5.3%), rush_hour (-2.6%). Median margin is thin (~5%).
+
+**What remains, and why it is hard:** the per-frame hole is ~7.75 ms, of
+which ~2.8 ms is intrinsic wave ramp/drain and ~5 ms is pre-analysis on
+the critical path. For live that 5 ms is *irreducible in position* -
+frame N's pre-analysis cannot begin before frame N arrives - so the only
+lever is making it cheaper or wider. Two attempts measured: row-parallel
+intra estimate (KEPT, +8.5%) and parallel plane generation (REJECTED,
+-11%: bonding overhead exceeded the ~0.5 ms bands and stole workers from
+the still-draining wave). Unmeasured ideas: fill ramp/drain with the
+frame's own trailing entropy work (E1b, costs 3% cycles), or cut
+pre-analysis work itself (changes RC decisions - outside bit-exact).
