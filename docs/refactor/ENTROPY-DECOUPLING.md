@@ -282,3 +282,59 @@ cycles; ft1la4 does it in the lookahead only), or (b) reducing the
 frequency of row-blocking - i.e. attacking CTU cost variance or the
 stagger's slack, or (c) cutting wake latency (spin-then-sleep in the
 pool before parking). (c) is untested and cheap to try.
+
+## Why la4 is transformational: it takes lookahead OFF the critical path
+
+Measured (bbb 150f ft1, 5 ms buckets, perf timestamps):
+
+| | la0 | la4 |
+|---|---|---|
+| mean CPUs | 2.99-3.14 | 3.35-3.43 |
+| time below 3.0 CPUs | 45.4% | 15.5% |
+| idle core-seconds | 25.3% | 16.3% |
+| **dips below 2.5 CPUs** | **158 runs** | **57 runs** |
+| dip time total | 1155 ms / 4320 ms | 435 ms / 4030 ms |
+| lookahead share of samples | 4.6% | 3.8% |
+
+Two facts kill the obvious explanation and reveal the real one:
+
+1. **la4 does NOT fill stalls with lookahead work** - lookahead is a
+   *smaller* share of samples with la4 (3.8% vs 4.6%), and is no more
+   concentrated in low-occupancy buckets (4.0% vs 6.4%). The extra
+   occupancy is ENCODE work packing better.
+2. **The dips are one per frame.** 158 dips over ~149 frames at la0 =
+   **1.06 dips/frame**, median 5 ms; la4 = 57 over ~153 frames =
+   0.38/frame. Weak autocorrelation peak at 25 ms (la0) ~ the 29 ms
+   frame period. Per frame: **7.75 ms lost at la0, 2.8 ms at la4.**
+
+So the ~1 idle core is a **per-frame-boundary hole**, not distributed
+micro-stalls (the earlier "distributed" reading came from 20 ms buckets,
+which smear a 5-15 ms hole across the frame period). Its two parts:
+
+- **~2.8 ms/frame intrinsic**: wave ramp-in and drain-out. At the top
+  and tail of a frame fewer than 4 rows are eligible, so occupancy
+  falls. Present at la4 too; unavoidable at ft1 without cross-frame
+  overlap.
+- **~5 ms/frame lookahead wait (la0 only)**: the frame encoder finishes
+  frame N and then *waits* while frame N+1's pre-analysis runs. That
+  work is ON the critical path.
+
+Row-parallel pre-lookahead makes that 5 ms wait ~4x faster; **la4
+removes it entirely** by having pre-analysis already done. That is the
+whole difference, and it is why la4 (+18%) beats ROWP (+8.5%).
+
+### The zero-latency version of la4
+
+Pre-analysis (Lowres::init + lowresIntraEstimate) is **provably
+decision-free at this config** - la0 and la4 outputs are byte-identical
+on 12/12 corpus sequences. So the fix is to decouple *pre-analysis
+depth* from *decision depth*: eagerly pre-analyse whatever frames are
+already queued while frame N encodes, while still deciding with
+lookaheadDepth 0. Decision latency unchanged; the 5 ms/frame wait
+disappears.
+
+Caveat worth stating plainly: this only helps when future frames are
+already available (file/VOD encoding). In a live capture pipeline frame
+N+1 does not exist while N encodes, so the 5 ms is irreducible there -
+and the row-parallel fix (which shortens rather than removes the wait)
+is exactly the right tool for that case. The two are complementary.
