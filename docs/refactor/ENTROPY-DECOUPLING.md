@@ -89,3 +89,55 @@ Expected E1b at ft1: +3-4% wall vs inline. NOT sufficient alone for
 30fps-everywhere: the ladder is E1b (fill stalls) -> E2 (approximate
 estimation contexts -> 1-CTU analysis stagger, the big utilization
 lever) -> CABAC phases A/B/C (shrink both chains, see CABAC-DESIGN.md).
+
+## MEASURED: where the idle cores actually are (2026-08-02)
+
+Prompted by Eben's objection that the "unchained work" argument for E1b
+applies equally to frame parallelism (whose constraint is inter
+availability) - i.e. it does not discriminate. It doesn't. Measured with
+x265's own instrumentation (--csv-log-level 2: Avg WPP, Ref Wait Wall,
+Stall Time, Row Blocks), bbb 300 frames, rec config, final build:
+
+| | ft1 | ft4 |
+|---|---|---|
+| encode fps | 26.28 | 34.59 |
+| total wall | 11.42 s | 8.67 s |
+| sum(frame-encoder compress wall) | 6.32 s (**55%** of wall) | 29.84 s (3.44 encoders concurrent) |
+| Avg WPP during compress | **3.87 / 4 (97%)** | 2.64 (per-encoder, shares pool - not comparable) |
+| Stall (no worker) per frame | **0.00 ms** | 8.0 ms |
+| Ref Wait Wall per frame | 0.1 ms | **38.9 ms (39% of the encoder's window)** |
+| Row blocks per frame | 103 | 81 |
+
+### Conclusions (these correct the earlier hand-waving)
+
+1. **The wavefront is not the ft1 problem.** While a frame is being
+   compressed, 3.87 of 4 workers are busy and stall time is exactly
+   zero. Rows do block (103/frame over 68 rows) but a worker essentially
+   always finds another ready row. The wave is ~97% efficient.
+2. **The ft1 ceiling is the 45% of wall-clock that is NOT frame
+   compression** - lookahead, frame init, rate control, bitstream
+   assembly, output. Whole-encode utilization is 2.88/4; solving
+   0.55*3.87 + 0.45*x = 2.88 gives **x ~ 1.7 cores during that 45%**.
+   That window, not the wave, is where the idle cores live.
+3. **At ft>1 the binding constraint is reference availability** - 39% of
+   each frame encoder's window is Ref Wait Wall. Exactly the inter-avail
+   chain Eben named. Frame threading works (26.3 -> 34.6 fps, +32%)
+   precisely because it overlaps one frame's serial window with
+   another's compression, and it saturates when ref-wait dominates.
+4. **Implication for E1b**: deferring entropy out of the wave targets a
+   phase that is already 97% busy, and parks the work in a serial tail
+   inside the very window that is already under-utilised. At ft1 it can
+   only pay if the trailing tasks fill the 45% window's idle 2.3 cores -
+   which is possible, but it is a *different* claim from "the wave
+   stalls", and must be measured as such.
+
+### Corrected target arithmetic for 30 fps at ft1
+
+Total work is 2.88 x 11.42 = 32.9 CPU-s for 300 frames. 30 fps = 10.0 s
+=> needs **3.29 cores average (+14% utilisation)**, not a faster encoder.
+Perfect 4.0 packing of the same work would give 36.5 fps. So the goal is
+reachable *entirely* by filling the 45% window - raising it from ~1.7 to
+~2.6 cores - with no reduction in work at all.
+
+NEXT: profile the 45% window (what runs between frame-encoder compress
+phases at ft1, and how parallel is it?) before writing any more code.
