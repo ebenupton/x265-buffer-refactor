@@ -482,3 +482,38 @@ instrument time-blocked-in-getDecidedPicture per frame in each mode.
 Note also the gap appears on the PGO+BOLT build (-1.4%) but is within
 noise on the plain build (29.12 vs 29.39), consistent with slack
 mattering more once frames encode faster - also unproven.
+
+### Closing the async2/la4 gap: four hypotheses, all refuted (2026-08-02)
+
+Eben's hypothesis: pre-analysis should outrank encode rows in the pool.
+The premise is CORRECT and was a real finding - `JobProvider` defaults
+`m_sliceType = INVALID_SLICE_PRIORITY` (10), `FrameEncoder` sets it to
+the slice type (P = 3), and **Lookahead never sets it at all**, so
+pre-analysis is the lowest-priority work in the pool.
+
+But promoting it (m_sliceType = 0, X265_LA_PRIO=1) measured NEUTRAL TO
+WORSE: blue_sky async2 29.74 -> 29.17, la4 34.13 -> 33.07 on crowd_run.
+Reason, visible in the code: `slicetypeDecide` is guarded by
+`m_sliceTypeBusy`, so only ONE worker can ever enter it. Promotion just
+makes extra workers abandon wave rows, find the provider busy, and
+bounce back - pure switching cost, no added parallelism.
+
+Refuted hypotheses, each by direct measurement:
+
+| hypothesis | test | result |
+|---|---|---|
+| la4 batches 4 frames per PreLookaheadGroup | instrument m_jobTotal histogram | FALSE - steady state is 1:396, 4:4 (batches only while filling) |
+| la4's queue slack absorbs variance, async2 blocks | count fast/slow path in getDecidedPicture | FALSE - 400 fast vs 2-4 slow, in BOTH modes; the API thread essentially never blocks |
+| lookahead needs pool priority | X265_LA_PRIO=1 | FALSE - neutral to -3% (single-entry decide) |
+| async wakes too often (threshold 1 vs N) | patch failed to apply; untested | UNKNOWN |
+
+And the gap itself is not robust: on the plain build with warmup,
+crowd_run has async2 AHEAD (33.97/34.07 vs 33.73) while blue_sky has
+la4 ahead by 1.4%. On the PGO+BOLT shipping build the fair protocol did
+show a uniform -0.7..-1.8%, so a small build-specific effect is likely
+real, but its mechanism is NOT explained by width, blocking, or priority.
+
+**Recommendation: ship ASYNC_LA=2 and stop chasing this.** It is <=1.4%,
+sequence-dependent, sometimes reversed, and costs 5 fewer frames of
+latency than the alternative. Remaining untested idea: the wake
+threshold (fire tryWakeOne at N rather than every addPicture).
