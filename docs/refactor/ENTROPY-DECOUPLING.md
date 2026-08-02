@@ -411,3 +411,37 @@ Note --rc-lookahead 1 is NOT the way to buy this: it costs 4 frames of
 latency (m_filled needs lookaheadDepth+2+bframes) for ~the same speed
 as ASYNC_LA=2. Measured frameLatency (inPoc - poc): async0=0,
 async1=1, async2=2, rc-lookahead1=4.
+
+## Does ASYNC_LA=2 recover everything --rc-lookahead 4 gave? (2026-08-02)
+
+**Almost: -1.4% geomean, at 2 frames of latency instead of 7.**
+
+Fair protocol (an earlier attempt was invalid - it ran async2 first for
+every sequence, so async2 always paid a cold y4m read and la4 always ran
+warm, manufacturing a uniform -2.5%; uniformity across all 12 sequences
+was the tell). Corrected: discarded warmup per sequence, then two passes
+with the config order swapped, max of each.
+
+| | async2 | la4 |
+|---|---|---|
+| geomean fps | 34.75 | 35.22 |
+| >=30 fps | 11/12 | 11/12 |
+| worst sequence | 27.30 | 27.71 |
+| **latency (inPoc-poc)** | **2 frames** | **7 frames** |
+
+Per-sequence delta is remarkably uniform: -0.7% to -1.8%, no sequence
+favouring async2, none worse than -1.8%. Both configs clear 30 fps on
+the same 11 sequences; riverbed misses in both.
+
+So async2 captures ~97% of the la4 win for 2/7ths of the latency. The
+residual ~1.4% is frame-level parallelism inside the pre-analysis: la4
+hands PreLookaheadGroup up to 4 frames at once (4-wide bonded group),
+while async2 processes one frame at a time (row-parallel via ROWP).
+
+Deeper async does NOT close it: ASYNC_LA=4 measured 27.7-28.2 fps on
+blue_sky vs async2's ~31.0 - the knob only moves the m_filled threshold
+while fullQueueSize stays 1, so frames are still decided one at a time
+and the API thread simply waits longer. Closing the last 1.4% would
+require letting the async path batch several queued frames into one
+PreLookaheadGroup (frame-level parallelism at bounded latency) - the
+obvious next change if that 1.4% is judged worth it.
