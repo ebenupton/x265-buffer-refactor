@@ -599,6 +599,16 @@ byte-identical). Verdicts by same-session interleaved A/B, bbb 30s.
 | C1 | NEON 4x4 |coeff| gather replacing memset+16 scalar stores | PASS | 1t **+0.3-1.7% WORSE** (3/3) | rejected (cabac-c1-neon-gather-rejected.patch) |
 | C2 | register-resident engine across a CG (locals, aliasing-proof) | PASS | 1t wash (1/3 better); 4t **+0.5% WORSE** | rejected (cabac-phaseC-regresident-rejected.patch) |
 
+| B2 | **extended INLINE asm** kernel (same instruction selection as B, but inlined at all call sites - no bl/ret, no member round-trip; verified inlined 10x inside codeCoeffNxN) | PASS | 1t **wash** (-0.4%, +0.3%, +0.1% across 3 pairs); 4t wash | rejected as no-gain (cabac-phaseB2-inline-asm-wash.patch) |
+
+**B2 is the decisive experiment.** It removes the only structural objection
+to phase B (out-of-line call overhead) while keeping x264's instruction
+selection - flat LPS row addressing, clz renorm, single csel for the
+state-63 cap - and it is bit-exact. It changes nothing measurable. With
+hand-scheduling and inlining both in hand and the result still a wash, the
+engine is demonstrably at its data-dependency floor: instruction count is
+not what x265's CABAC costs.
+
 ## Why the design's estimates did not materialise
 
 1. **Inlining is worth more than instruction count on this core.** Phase A's
@@ -618,8 +628,9 @@ byte-identical). Verdicts by same-session interleaved A/B, bbb 30s.
    reloads are store-to-load forwards from L1, ~4 cycles, fully overlapped;
    carrying locals just added the load/store bracket per CG and cost more
    at 4t.
-4. **The 4.5-6.6% "entropy" self-time is mostly not engine overhead.** After
-   phase A the engine is close to its data-dependency floor: ldrb(ctx) ->
+4. **The 4.5-6.6% "entropy" self-time is mostly not engine overhead.**
+   Confirmed by B2 (inline asm = wash). After phase A the engine sits ON its
+   data-dependency floor: ldrb(ctx) ->
    ubfx -> ldrb(lps) -> sub -> shift is ~13-15 cycles of pure chain that no
    ISA-level change removes. Cutting it needs *fewer bins* (algorithmic) or
    *parallel bins* (impossible in CABAC by construction).
