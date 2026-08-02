@@ -582,3 +582,53 @@ Cumulative: ~1.2-2.3% of total encode cycles at the gate operating point
 (consistent with the memo's "credible 1-2%"), plus a ~2x reduction of the
 E1b trailing-entropy serial chain, which is the strategic payoff for
 30 fps at ft1.
+
+---
+
+# IMPLEMENTATION RESULTS (2026-08-02) — measured, not predicted
+
+All phases were implemented and gated (3-config md5 vs dm-gate-tot-ref.md5,
+byte-identical). Verdicts by same-session interleaved A/B, bbb 30s.
+
+| phase | what was built | gate | measured | verdict |
+|---|---|---|---|---|
+| A | W/C kernel split, devirtualised byte sink (Bitstream::writeByteFast), ALWAYS_INLINE kernels at the 11 coeff-loop call sites, hidden-visibility LUTs | PASS | 1t **-0.2..-0.3%** (3/3 pairs); 4t wash; encodeBin+codeCoeffNxN self 6.71% -> 6.53% | **KEPT** (fe7f50a02) |
+| A4 v1 | two-sided branchless select (compute both, mask) | PASS | 1t **+2-3% WORSE** | rejected |
+| A4 v2 | x264-style unified clz-23 renorm + csel, LPS-gated state-63 cap | PASS | 1t **+1.5% WORSE** | rejected |
+| B | full aarch64 asm kernel (cabac-a.S, 30 instr, x264-modelled, HEVC-adapted, offsets contract, tail-call flush) | PASS | 1t **+1.0% WORSE** (3/3); 4t +0.4% | rejected (cabac-a.S.rejected, cabac-phaseB-asm-rejected.patch) |
+| C1 | NEON 4x4 |coeff| gather replacing memset+16 scalar stores | PASS | 1t **+0.3-1.7% WORSE** (3/3) | rejected (cabac-c1-neon-gather-rejected.patch) |
+| C2 | register-resident engine across a CG (locals, aliasing-proof) | PASS | 1t wash (1/3 better); 4t **+0.5% WORSE** | rejected (cabac-phaseC-regresident-rejected.patch) |
+
+## Why the design's estimates did not materialise
+
+1. **Inlining is worth more than instruction count on this core.** Phase A's
+   ALWAYS_INLINE kernels let GCC schedule bin i+1's LUT loads under bin i's
+   dependency chain and keep the hot path branch-predicted. The asm kernel
+   (phase B) is 30 instructions vs ~36 compiled, but pays `bl`/`ret` plus a
+   full member round-trip per bin: net loss. x264's asm wins because x264
+   calls it from C loops that never had an inlined alternative - x265 after
+   phase A does.
+2. **The A76 predictor beats branchless CABAC.** Both branchless variants
+   lost. The MPS/LPS skew (~85/15) is exactly what a TAGE-class predictor
+   eats for breakfast; csel serialises the chain instead (range' feeds clz
+   feeds both shifts), converting a predicted-away branch into 2-3 cycles
+   of real dependency.
+3. **Strict aliasing was not the bottleneck.** C2's premise (uint8_t ctx
+   writes force m_low/m_range reloads) was correct in principle but the
+   reloads are store-to-load forwards from L1, ~4 cycles, fully overlapped;
+   carrying locals just added the load/store bracket per CG and cost more
+   at 4t.
+4. **The 4.5-6.6% "entropy" self-time is mostly not engine overhead.** After
+   phase A the engine is close to its data-dependency floor: ldrb(ctx) ->
+   ubfx -> ldrb(lps) -> sub -> shift is ~13-15 cycles of pure chain that no
+   ISA-level change removes. Cutting it needs *fewer bins* (algorithmic) or
+   *parallel bins* (impossible in CABAC by construction).
+
+## What remains credible
+
+- Batched **counting-side** helpers for aarch64: costC1C2Flag and
+  costCoeffRemain still have no asm here (x86 does). That is estimation,
+  not emission - it helps the wave, not the E1b trailing chain.
+- E1b task-parallelism remains the real lever for the 30fps@ft1 goal: the
+  entropy work is near its serial floor, so the win must come from running
+  it concurrently, not faster.
