@@ -561,3 +561,45 @@ judged worth it. The starvation finding stands on its own and is the
 most actionable thing here: any future attempt should target *giving
 pre-analysis workers when the wave is saturated*, which bonding
 structurally cannot do.
+
+### Row-jobs via the provider: CORRECT, ENGAGED, and still NEUTRAL
+
+Third attempt (la-rowjobs-neutral.patch), after v1 (spin, -4%) and v2
+(race, corrupted output). Design that finally works:
+
+- row group **owned by the Lookahead**, never a stack temporary;
+- bands claimed with one atomic fetch_and_add on `m_rowClaim`, with the
+  **generation re-checked after claiming**, so a straggler helper from
+  frame N is inert rather than dangerous (the v2 bug);
+- master publishes by bumping `m_rowGen` to odd behind a barrier, helps,
+  then blocks on `m_rowDone.waitForChange` (no spin), then bumps to even;
+- `m_sliceType = 0` so the provider outranks frame encoders - meaningful
+  only now that there is claimable work behind findJob.
+
+**Gate: PASS, bit-exact.** And it demonstrably engages: instrumented band
+ownership shows **helpers process 62.4%** of bands (1248/2000) versus the
+bonding path's 0 peers on 69% of frames.
+
+**Performance: neutral.** crowd_run 36.60 vs async2 36.76; blue_sky 32.46
+vs 32.86; riverbed 26.00 vs 25.98. la4 still ~1.5-2% ahead of both.
+
+### What this settles
+
+The starvation is real but **harmless**, and the whole chain is now
+consistent:
+
+1. At la0/async0 the decide runs INLINE on the API thread, so
+   pre-analysis is on the critical path - which is why the row-parallel
+   split (49ee2938d) bought +8.5% there.
+2. At async2 the decide runs on a worker and completes before the
+   encoder needs it: `getDecidedPicture` takes the fast path 400/400
+   times (2-4 slow events in 500 frames). Pre-analysis is OFF the
+   critical path.
+3. Therefore making it *more* parallel (62% helper share) cannot help -
+   and measurably does not.
+
+So the la4 residual is NOT explained by group width, API-thread
+blocking, provider priority, or worker starvation. Four mechanisms
+tested and eliminated. Whatever remains is smaller than the effort
+already spent on it; the recommended config is unchanged
+(ft1 + ASYNC_LA=2), and this patch is preserved but not merged.
