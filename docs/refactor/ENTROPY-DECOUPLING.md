@@ -380,3 +380,34 @@ intra estimate (KEPT, +8.5%) and parallel plane generation (REJECTED,
 the still-draining wave). Unmeasured ideas: fill ramp/drain with the
 frame's own trailing entropy work (E1b, costs 3% cycles), or cut
 pre-analysis work itself (changes RC decisions - outside bit-exact).
+
+## RECOMMENDED CONFIG (2026-08-02, final build)
+
+Build: refactor rebased on x265 ToT + CABAC phase A + row-parallel
+pre-lookahead + X265_ASYNC_LA, PGO+BOLT (trained with ASYNC_LA=1),
+both gates bit-exact.
+
+`--preset ultrafast --tune zerolatency --bframes 0 --rd 1 --limit-modes
+ --limit-refs 3 --no-rect --no-amp --aq-mode 0 --no-sao --ctu 16
+ --no-scenecut --no-weightp --no-weightb --me dia --subme 1
+ --max-merge 2 --merange 8 --bitrate 4000 --pools 4 --frame-threads 1`
+plus **X265_ASYNC_LA=1** (one frame of latency).
+
+Corpus, 12 seqs, all three latency budgets, 12/12 byte-identical:
+
+| budget | geomean fps | >=30 fps | worst |
+|---|---|---|---|
+| 0 frames (pure zero-latency) | 31.68 | 9/12 | 25.52 |
+| **1 frame (recommended)** | **32.77 (+3.4%)** | **11/12** | 26.24 |
+| 2 frames | 34.54 (+9.0%) | 11/12 | 27.16 |
+
+One frame of latency buys +3.4% geomean and takes real-time 1080p30
+coverage from 9/12 to **11/12** (riverbed alone misses, at 26.24).
+A second frame buys another 5.4 points and raises the floor to 27.16,
+but does not add sequences. Gains are content-dependent: blue_sky
++12.4% (it was the most lookahead-bound), sunflower ~0%.
+
+Note --rc-lookahead 1 is NOT the way to buy this: it costs 4 frames of
+latency (m_filled needs lookaheadDepth+2+bframes) for ~the same speed
+as ASYNC_LA=2. Measured frameLatency (inPoc - poc): async0=0,
+async1=1, async2=2, rc-lookahead1=4.
