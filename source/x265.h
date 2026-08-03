@@ -2374,6 +2374,17 @@ typedef struct x265_param
 
     /*tune*/
     const char* tune;
+
+    /* Number of frames the lookahead may hold before decisions are consumed,
+     * purely to let slicetypeDecide() run on a worker thread concurrently with
+     * the frame encoder instead of inline on the API thread.  It does NOT
+     * change any decision: lookaheadDepth still governs what the lookahead is
+     * allowed to see.  Costs exactly this many frames of latency.
+     *
+     * At tune zerolatency (lookaheadDepth 0) the pre-analysis otherwise runs
+     * on the critical path and the pool idles; on a 4-core Cortex-A76 a value
+     * of 2 is worth ~9% with byte-identical output.  Default 0 (off). */
+    int       asyncLookahead;
 } x265_param;
 
 /* x265_param_alloc:

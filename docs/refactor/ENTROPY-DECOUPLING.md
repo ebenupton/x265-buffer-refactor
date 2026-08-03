@@ -391,7 +391,21 @@ both gates bit-exact.
  --limit-refs 3 --no-rect --no-amp --aq-mode 0 --no-sao --ctu 16
  --no-scenecut --no-weightp --no-weightb --me dia --subme 1
  --max-merge 2 --merange 8 --bitrate 4000 --pools 4 --frame-threads 1`
-plus **X265_ASYNC_LA=1** (one frame of latency).
+plus **`--async-lookahead 2`** (two frames of latency).
+
+**Now a formal parameter** (was the env hack X265_ASYNC_LA): CLI
+`--async-lookahead <integer>`, API `x265_param::asyncLookahead`,
+default 0 (off), validated against X265_LOOKAHEAD_MAX. It does not
+change any decision - lookaheadDepth still governs what the lookahead
+sees - it only lets slicetypeDecide() run on a pool worker instead of
+inline on the API thread, at a cost of exactly N frames of latency.
+Verified: 3-config gate PASS with the flag enabled, and md5-identical
+output at 0/1/2 (33.38 / 34.93 / 36.52 fps on bbb 300f, ft1).
+
+NOTE for anyone adding a param to x265: `x265_copy_params()`
+(param.cpp:2731) is FIELD-BY-FIELD, so a new field is silently dropped
+on every copy and the option appears to parse but do nothing. That cost
+an hour here.
 
 Corpus, 12 seqs, all three latency budgets, 12/12 byte-identical:
 

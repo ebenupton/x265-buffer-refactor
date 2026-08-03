@@ -196,6 +196,7 @@ namespace X265_NS {
         H0("   --radl <integer>              Number of RADL pictures allowed in front of IDR. Default %d\n", param->radl);
         H0("   --intra-refresh               Use Periodic Intra Refresh instead of IDR frames\n");
         H0("   --rc-lookahead <integer>      Number of frames for frame-type lookahead (determines encoder latency) Default %d\n", param->lookaheadDepth);
+        H0("   --async-lookahead <integer>   Frames buffered so lookahead runs on a worker, not inline. Does not change decisions; costs N frames latency. Default %d\n", param->asyncLookahead);
         H1("   --lookahead-slices <0..16>    Number of slices to use per lookahead cost estimate. Default %d\n", param->lookaheadSlices);
         H0("   --lookahead-threads <integer> Number of threads to be dedicated to perform lookahead only. Default %d\n", param->lookaheadThreads);
         H0("-b/--bframes <0..16>             Maximum number of consecutive b-frames. Default %d\n", param->bframes);

@@ -152,6 +152,7 @@ static const struct option long_options[] =
     { "ctu-info",       required_argument, NULL, 0 },
     { "intra-refresh",        no_argument, NULL, 0 },
     { "rc-lookahead",   required_argument, NULL, 0 },
+    { "async-lookahead", required_argument, NULL, 0 },
     { "lookahead-slices", required_argument, NULL, 0 },
     { "lookahead-threads", required_argument, NULL, 0 },
     { "bframes",        required_argument, NULL, 'b' },

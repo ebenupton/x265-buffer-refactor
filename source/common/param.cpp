@@ -196,6 +196,7 @@ void x265_param_default(x265_param* param)
 	param->craNal = 0;
     param->bframes = 4;
     param->lookaheadDepth = 20;
+    param->asyncLookahead = 0;
     param->bFrameAdaptive = X265_B_ADAPT_TRELLIS;
     param->bBPyramid = 1;
     param->scenecutThreshold = 40; /* Magic number pulled in from x264 */
@@ -1079,6 +1080,7 @@ int x265_param_parse(x265_param* p, const char* name, const char* value)
     OPT("keyint") p->keyframeMax = atoi(value);
     OPT("min-keyint") p->keyframeMin = atoi(value);
     OPT("rc-lookahead") p->lookaheadDepth = atoi(value);
+        OPT("async-lookahead") p->asyncLookahead = atoi(value);
     OPT("bframes") p->bframes = atoi(value);
     OPT("bframe-bias") p->bFrameBias = atoi(value);
     OPT("b-adapt")
@@ -1777,6 +1779,8 @@ int x265_check_params(x265_param* param)
           "max consecutive bframe count must be 16 or smaller");
     CHECK(param->lookaheadDepth > X265_LOOKAHEAD_MAX,
           "Lookahead depth must be less than 256");
+    CHECK(param->asyncLookahead < 0 || param->asyncLookahead > X265_LOOKAHEAD_MAX,
+          "async-lookahead must be between 0 and X265_LOOKAHEAD_MAX");
     CHECK(param->lookaheadSlices > 16 || param->lookaheadSlices < 0,
           "Lookahead slices must between 0 and 16");
     CHECK(param->rc.aqMode < X265_AQ_NONE || X265_AQ_EDGE < param->rc.aqMode,
@@ -2774,6 +2778,7 @@ void x265_copy_params(x265_param* dst, x265_param* src)
     dst->bFrameBias = src->bFrameBias;
     dst->bBPyramid = src->bBPyramid;
     dst->lookaheadDepth = src->lookaheadDepth;
+    dst->asyncLookahead = src->asyncLookahead;
     dst->lookaheadSlices = src->lookaheadSlices;
     dst->lookaheadThreads = src->lookaheadThreads;
     dst->scenecutThreshold = src->scenecutThreshold;

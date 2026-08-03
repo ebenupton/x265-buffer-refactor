@@ -87,19 +87,6 @@ inline uint32_t acEnergyPlane(Frame *curFrame, pixel* src, intptr_t srcStride, i
 
 namespace X265_NS {
 
-/* One-frame-latency asynchronous pre-analysis (see checkLookaheadQueue). */
-static int asyncLookahead()
-{
-    static int v = -1;
-    if (v < 0)
-    {
-        const char* e = getenv("X265_ASYNC_LA");
-        v = e ? (*e - '0') : 0;
-        if (v < 0 || v > 8) v = 0;
-    }
-    return v;   /* 0 = off; else = frames the input queue must hold */
-}
-
 uint32_t acEnergyVarHist(uint64_t sum_ssd, int shift)
 {
     uint32_t sum = (uint32_t)sum_ssd;
@@ -1262,16 +1249,15 @@ void Lookahead::checkLookaheadQueue(int &frameCnt)
     {
         if (!m_param->bframes & !m_param->lookaheadDepth)
         {
-            /* Zero-latency. X265_ASYNC_LA=1 trades exactly ONE frame of
-             * latency for asynchronous pre-analysis: hold one extra frame so
-             * slicetypeDecide() runs on a pool worker (via the tryWakeOne()
-             * below) concurrently with the frame encoder, instead of inline
-             * on the API thread at getDecidedPicture() time - which is the
-             * ~5 ms/frame hole measured on the critical path.  Decisions are
-             * unaffected (lookaheadDepth stays 0; pre-analysis is provably
-             * decision-free at this configuration), so output is unchanged. */
-            if (asyncLookahead())
-                m_filled = (frameCnt >= asyncLookahead());  /* 1 or 2 frames */
+            /* --async-lookahead N holds N frames so slicetypeDecide() runs on
+             * a pool worker (woken by the tryWakeOne() below) concurrently
+             * with the frame encoder, instead of inline on the API thread at
+             * getDecidedPicture() time - the ~5 ms/frame hole measured on the
+             * critical path.  Decisions are unaffected (lookaheadDepth stays
+             * 0 and pre-analysis is decision-free here), so output is
+             * unchanged; the cost is exactly N frames of latency. */
+            if (m_param->asyncLookahead > 0)
+                m_filled = (frameCnt >= m_param->asyncLookahead);
             else
                 m_filled = true;
         }
@@ -1280,7 +1266,7 @@ void Lookahead::checkLookaheadQueue(int &frameCnt)
     }
 
     m_inputLock.acquire();
-    if (m_pool && (int)m_inputQueue.size() >= (asyncLookahead() ? 1 : (int)m_fullQueueSize))
+    if (m_pool && (int)m_inputQueue.size() >= (m_param->asyncLookahead > 0 ? 1 : (int)m_fullQueueSize))
         tryWakeOne();
     m_inputLock.release();
 }
