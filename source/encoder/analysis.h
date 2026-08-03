@@ -247,7 +247,7 @@ protected:
     double aqQPOffset(const CUData& ctu, const CUGeom& cuGeom);
     double cuTreeQPOffset(const CUData& ctu, const CUGeom& cuGeom);
     void calculateNormFactor(CUData& ctu, int qp);
-    void normFactor(const pixel* src, uint32_t blockSize, CUData& ctu, int qp, TextType ttype);
+    void normFactor(const pixel* src, uint32_t blockSize, uint32_t stride, CUData& ctu, int qp, TextType ttype);
 
     void collectPUStatistics(const CUData& ctu, const CUGeom& cuGeom);
 

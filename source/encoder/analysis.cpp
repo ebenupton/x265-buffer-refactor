@@ -1686,7 +1686,10 @@ SplitData Analysis::compressInterCU_rd0_4(const CUData& parentCTU, const CUGeom&
                 {
                     if (depth)
                         skipRecursion = recursionDepthCheck(parentCTU, cuGeom, *md.bestMode);
-                    if (m_bHD && !skipRecursion && m_param->rdLevel == 2 && md.fencYuv.m_size != MAX_CU_SIZE)
+                    /* m_width, not m_size: at depth 0 fencYuv is a view whose
+                     * m_size is the picture stride, which would never compare
+                     * equal to MAX_CU_SIZE and silently invert this test. */
+                    if (m_bHD && !skipRecursion && m_param->rdLevel == 2 && md.fencYuv.m_width != MAX_CU_SIZE)
                         skipRecursion = complexityCheckCU(*md.bestMode);
                 }
                 else if (cuGeom.log2CUSize >= MAX_LOG2_CU_SIZE - 1 && m_param->recursionSkipMode == EDGE_BASED_RSKIP)
@@ -4282,16 +4285,21 @@ bool Analysis::complexityCheckCU(const Mode& bestMode)
     {
         uint32_t mean = 0;
         uint32_t homo = 0;
-        uint32_t cuSize = bestMode.fencYuv->m_size;
+        /* fencYuv may be a VIEW into the picture buffer (depth 0), in which
+         * case m_size is the picture stride, not the CU width. Take the width
+         * from the CU and use m_size purely as the row stride — for dense
+         * Yuvs the two are equal, so this is a no-op at depth > 0. */
+        uint32_t cuSize = bestMode.fencYuv->m_width;
+        intptr_t stride = (intptr_t)bestMode.fencYuv->m_size;
         for (uint32_t y = 0; y < cuSize; y++) {
             for (uint32_t x = 0; x < cuSize; x++) {
-                mean += (bestMode.fencYuv->m_buf[0][y * cuSize + x]);
+                mean += (bestMode.fencYuv->m_buf[0][y * stride + x]);
             }
         }
         mean = mean / (cuSize * cuSize);
         for (uint32_t y = 0; y < cuSize; y++) {
             for (uint32_t x = 0; x < cuSize; x++) {
-                homo += abs(int(bestMode.fencYuv->m_buf[0][y * cuSize + x] - mean));
+                homo += abs(int(bestMode.fencYuv->m_buf[0][y * stride + x] - mean));
             }
         }
         homo = homo / (cuSize * cuSize);
@@ -4456,7 +4464,7 @@ int Analysis::calculateQpforCuSize(const CUData& ctu, const CUGeom& cuGeom, int3
     return x265_clip3(m_param->rc.qpMin, m_param->rc.qpMax, (int)(qp + 0.5));
 }
 
-void Analysis::normFactor(const pixel* src, uint32_t blockSize, CUData& ctu, int qp, TextType ttype)
+void Analysis::normFactor(const pixel* src, uint32_t blockSize, uint32_t stride, CUData& ctu, int qp, TextType ttype)
 {
     static const int ssim_c1 = (int)(.01 * .01 * PIXEL_MAX * PIXEL_MAX * 64 + .5); // 416
     static const int ssim_c2 = (int)(.03 * .03 * PIXEL_MAX * PIXEL_MAX * 64 * 63 + .5); // 235963
@@ -4473,7 +4481,7 @@ void Analysis::normFactor(const pixel* src, uint32_t blockSize, CUData& ctu, int
     {
         for (uint32_t block_xx = 0; block_xx < blockSize; block_xx += 4)
         {
-            uint32_t temp = src[block_yy * blockSize + block_xx] >> shift;
+            uint32_t temp = src[block_yy * stride + block_xx] >> shift;
             z_o += temp * temp; // 2 * (Z(0)) pow(2)
         }
     }
@@ -4483,7 +4491,7 @@ void Analysis::normFactor(const pixel* src, uint32_t blockSize, CUData& ctu, int
     // 2. Calculate ac component
     uint64_t z_k = 0;
     int block = (int)(((log(blockSize) / log(2)) - 2) + 0.5);
-    primitives.cu[block].normFact(src, blockSize, shift, &z_k);
+    primitives.cu[block].normFact(src, stride, shift, &z_k);
 
     // Remove the DC part
     z_k -= z_o;
@@ -4498,18 +4506,20 @@ void Analysis::normFactor(const pixel* src, uint32_t blockSize, CUData& ctu, int
 void Analysis::calculateNormFactor(CUData& ctu, int qp)
 {
     const pixel* srcY = m_modeDepth[0].fencYuv.m_buf[0];
-    uint32_t blockSize = m_modeDepth[0].fencYuv.m_size;
+    /* m_size is the STRIDE (the depth-0 fencYuv is a view into the picture);
+     * the iteration bound is the logical CU width. */
+    uint32_t blockSize = m_modeDepth[0].fencYuv.m_width;
 
-    normFactor(srcY, blockSize, ctu, qp, TEXT_LUMA);
+    normFactor(srcY, blockSize, m_modeDepth[0].fencYuv.m_size, ctu, qp, TEXT_LUMA);
 
     if (m_csp != X265_CSP_I400 && m_frame->m_fencPic->m_picCsp != X265_CSP_I400)
     {
         const pixel* srcU = m_modeDepth[0].fencYuv.m_buf[1];
         const pixel* srcV = m_modeDepth[0].fencYuv.m_buf[2];
-        uint32_t blockSizeC = m_modeDepth[0].fencYuv.m_csize;
+        uint32_t blockSizeC = m_modeDepth[0].fencYuv.m_cwidth;
 
-        normFactor(srcU, blockSizeC, ctu, qp, TEXT_CHROMA_U);
-        normFactor(srcV, blockSizeC, ctu, qp, TEXT_CHROMA_V);
+        normFactor(srcU, blockSizeC, m_modeDepth[0].fencYuv.m_csize, ctu, qp, TEXT_CHROMA_U);
+        normFactor(srcV, blockSizeC, m_modeDepth[0].fencYuv.m_csize, ctu, qp, TEXT_CHROMA_V);
     }
 }
 

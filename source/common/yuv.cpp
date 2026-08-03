@@ -64,6 +64,8 @@ Yuv::Yuv()
     m_ownedBuf[0] = NULL;
     m_ownedBuf[1] = NULL;
     m_ownedBuf[2] = NULL;
+    m_width  = 0;
+    m_cwidth = 0;
     m_ownedSize  = 0;
     m_ownedCSize = 0;
     m_isView = false;
@@ -78,6 +80,8 @@ bool Yuv::create(uint32_t size, int csp)
 
     m_size  = size;
     m_part = partitionFromSizes(size, size);
+    m_width  = size;
+    m_cwidth = size >> m_hChromaShift;
 
     for (int i = 0; i < 2; i++)
         for (int j = 0; j < MAX_NUM_REF; j++)
@@ -151,6 +155,8 @@ bool Yuv::createView(uint32_t size, int csp)
 
     m_size  = size;
     m_part  = partitionFromSizes(size, size);
+    m_width  = size;
+    m_cwidth = size >> m_hChromaShift;
 
     for (int i = 0; i < 2; i++)
         for (int j = 0; j < MAX_NUM_REF; j++)

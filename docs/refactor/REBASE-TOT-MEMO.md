@@ -58,3 +58,53 @@ PGO+BOLT layer rebuilt on the rebased tree (same recipe,
 `docs/refactor/pgobolt-pipeline.sh` adapted for soname .216 and the
 ToT-referenced gate `dm-gate-tot.sh`); artifacts in
 `install-rebase-pgobolt/`.
+
+## Crash regression in the depth-0 fencYuv view (found+fixed 2026-08-03)
+
+**Symptom**: deterministic SIGSEGV, ~frame 7 of bbb, on plain
+`--preset ultrafast --tune zerolatency` (any thread config, including
+`--pools none`, so not a race). Upstream ToT does not crash. Present in
+every build back to 31 July.
+
+**Root cause**: Phase 1 replaced the depth-0 `fencYuv` dense copy with a
+VIEW into the picture buffer:
+`m_modeDepth[0].fencYuv.setView(...)` instead of `copyFromPicYuv(...)`.
+By design (documented in yuv.h) a view's `m_size`/`m_csize` are the
+**picture stride**, not the CU width. Three consumers used `m_size` as an
+iteration BOUND as well as a stride, which is only valid for dense Yuvs:
+
+| site | consequence with a view |
+|---|---|
+| `Analysis::complexityCheckCU` | loops `y,x < 2048` (the stride) over a 32x32 CU -> reads ~4 MB off the plane -> SIGSEGV |
+| `Analysis::normFactor` (via `calculateNormFactor`, `--ssim-rd`) | same OOB read, PLUS `primitives.cu[log2(2048)-2]` = `cu[9]`, out of range -> wild function pointer |
+| `analysis.cpp:1689` (`m_size != MAX_CU_SIZE`) | stride never equals 64, so the `m_bHD && rdLevel==2` test silently inverted |
+
+**Fix**: `Yuv` now carries `m_width`/`m_cwidth` - the logical CU width from
+`create()`/`createView()`, never overwritten by `setView()`/`setReconView()`.
+Bounds use `m_width`; `m_size` is used strictly as a stride. `normFactor()`
+takes width and stride as separate arguments.
+
+**Verification**: previously-crashing config now produces output
+**byte-identical to upstream ToT** (994555 bytes, same md5) - the fix
+restores correct semantics, not merely absence of a fault. `--ssim-rd`
+runs clean. Canonical configs unchanged (pre-fix `build-pgo` and the
+fixed build agree bit-exactly on c3).
+
+**Why it hid for weeks**: every gate config pinned `--rd 1 --ctu 16`.
+At ctu 16 the depth-0 CU is already minimum size so there is no
+recursion and `complexityCheckCU` is never called; `--rd 1` avoids the
+other path. No config exercised stock preset defaults.
+
+**Gate hardening** (`tools/dm-gate-tot.sh`, now versioned in-repo):
+- new config **c4** = stock `--preset ultrafast --tune zerolatency`
+  (ctu 32, rd 2, rskip) at 120 frames, which exercises the view. Verified
+  to catch this bug: pre-fix build gives `GATE-ERROR: config c4 exited rc=139`.
+- the script previously took an install prefix and, if the binary was
+  missing, silently re-hashed **stale files in /tmp/dm-gate and printed
+  GATE-PASS**. It now resolves install-prefix or build-dir layouts,
+  wipes the work dir, and aborts on non-zero exit or empty output.
+- c1/c2/c4 references equal upstream ToT's output; **c3 must come from our
+  tree**, since at `--frame-threads 4` upstream silently forces ft1
+  (bug 8f11c33ac) while our deviation honours the explicit request.
+- reference md5s are now committed alongside the script; they previously
+  lived only in an untracked file outside the repo.

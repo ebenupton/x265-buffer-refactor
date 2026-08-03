@@ -44,6 +44,14 @@ public:
     uint32_t m_csize;
     int      m_part;         // cached partition enum size
 
+    /* Logical CU width in pixels, as passed to create()/createView(). Unlike
+     * m_size/m_csize this is NEVER overwritten by setView()/setReconView(),
+     * so it stays valid while the Yuv points into a picture buffer. Any code
+     * that needs an ITERATION BOUND must use m_width/m_cwidth; m_size/m_csize
+     * are strides only. */
+    uint32_t m_width;
+    uint32_t m_cwidth;
+
     int      m_csp;
     int      m_hChromaShift;
     int      m_vChromaShift;
