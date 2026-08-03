@@ -617,3 +617,67 @@ blocking, provider priority, or worker starvation. Four mechanisms
 tested and eliminated. Whatever remains is smaller than the effort
 already spent on it; the recommended config is unchanged
 (ft1 + ASYNC_LA=2), and this patch is preserved but not merged.
+
+## Grinding the async2 vs la4 gap: diagnosed, three fixes, all neutral
+
+### The gap is real and precisely characterised
+
+On a PGO+BOLT build trained with `--async-lookahead 2` (so profile and
+measurement agree - the previous build was trained on one path and
+measured on another, which is why the gap looked build-specific):
+
+| sequence | async2 | la4 | delta |
+|---|---|---|---|
+| crowd_run | 38.02 | 38.46 | -1.14% |
+| blue_sky | 33.73 | 34.10 | -1.09% |
+| station2 | 33.59 | 33.88 | -0.86% |
+| riverbed | 27.10 | 27.59 | -1.78% |
+| park_joy | 39.52 | 40.40 | -2.18% |
+| tractor | 32.77 | 33.28 | -1.53% |
+
+**What la4 actually does** (park_joy, 3 interleaved pairs):
+
+| | instructions | cycles | IPC | CPUs busy |
+|---|---|---|---|---|
+| async2 | 161.77 G | 104.7 G | 1.545 | 3.18-3.29 |
+| la4 | 161.78 G | 110.1 G (+5%) | 1.473 | **3.37-3.51** |
+
+Identical instructions. la4 burns MORE cycles at WORSE IPC and still
+wins wall-clock, purely by keeping ~0.2-0.3 more cores busy. It is not
+doing less work or better work - it has more *independently schedulable*
+work at any instant, and it buys that with queue depth, i.e. latency.
+
+### Three attempts to supply that work at zero latency - all neutral
+
+The frame's own entropy coding is ~6.5% of cycles ~= 0.22 cores, and the
+dips are ~14% of wall at ~2.5 CPUs ~= 0.21 cores of idle capacity. The
+arithmetic matched exactly, so it looked like the answer. It is not.
+All three were **bit-exact** (3-config gate PASS) and all three moved
+CPUs-busy by <0.03:
+
+| placement | result |
+|---|---|
+| cursor advanced when a worker finishes a row | neutral - **relocates** work the wave would have done anyway |
+| cursor as fallback in findJob, plus on row completion | neutral - row-finishers consume it eagerly, nothing left for dips |
+| cursor dip-only (no eager consumption) | neutral - dips still not filled |
+
+### Conclusion
+
+**The wave's idle capacity cannot be filled by work with a sequential
+dependency chain.** Entropy must be coded in row order (CABAC contexts
+chain), so at most one worker can ever be inside it; a dip with three
+idle workers can absorb at most one worker's worth, and only if the
+cursor happens to have pending rows at that instant. la4's advantage
+comes from genuinely *independent* work - other frames' pre-analysis -
+which any number of workers can take simultaneously. That is why only
+queue depth buys the cores, and why it costs latency by construction.
+
+So the remaining ~1.4% is an intrinsic latency purchase: 2 frames
+(async2) vs 7 frames (la4). Recommendation unchanged - ship
+`--async-lookahead 2`; the 1.4% is not worth 5 extra frames.
+
+Patch preserved: `e1b-entropy-cursor-neutral.patch`. Note it contains a
+latent defect - the findJob fallback sets `m_helpWanted = true`
+unconditionally, which can spin a worker when the cursor has nothing
+pending. It measured neutral rather than worse, but do not resurrect it
+without fixing that.
