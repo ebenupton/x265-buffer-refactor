@@ -40,6 +40,7 @@
 
 namespace X265_NS {
 
+
 /* Entropy-decoupling probe E1a: runtime switch, one binary for A/B. */
 static int X265_DEFER_ENTROPY_MODE()
 {
@@ -107,6 +108,8 @@ void FrameEncoder::destroy()
     delete[] m_backupStreams;
     X265_FREE(m_sliceBaseRow);
     X265_FREE((void*)m_bAllRowsStop);
+    X265_FREE((void*)m_sliceRowsFlushed);
+    X265_FREE((void*)m_rowFlushed);
     X265_FREE((void*)m_vbvResetTriggerRow);
     X265_FREE(m_sliceMaxBlockRow);
     X265_FREE(m_cuGeoms);
@@ -140,6 +143,8 @@ bool FrameEncoder::init(Encoder *top, int numRows, int numCols)
 
     m_sliceBaseRow = X265_MALLOC(uint32_t, m_param->maxSlices + 1);
     m_bAllRowsStop = X265_MALLOC(bool, m_param->maxSlices);
+    m_sliceRowsFlushed = X265_MALLOC(int, m_param->maxSlices);
+    m_rowFlushed = X265_MALLOC(int, numRows);
     m_vbvResetTriggerRow = X265_MALLOC(int, m_param->maxSlices);
     ok &= !!m_sliceBaseRow;
     m_sliceGroupSize = (uint16_t)(m_numRows + m_param->maxSlices - 1) / m_param->maxSlices;
@@ -473,6 +478,11 @@ void FrameEncoder::compressFrame(int layer)
     m_stallStartTime[layer] = 0;
 
     m_completionCount = 0;
+    m_slicesReady = 0;
+    memset((void*)m_sliceRowsFlushed, 0, sizeof(int) * m_param->maxSlices);
+    memset((void*)m_rowFlushed, 0, sizeof(int) * m_numRows);
+    m_earlyNalMark = 0;
+    m_earlyActive = earlySliceEligible(0);
     memset((void*)m_bAllRowsStop, 0, sizeof(bool) * m_param->maxSlices);
     memset((void*)m_vbvResetTriggerRow, -1, sizeof(int) * m_param->maxSlices);
     m_rowSliceTotalBits[0] = 0;
@@ -1042,8 +1052,44 @@ void FrameEncoder::compressFrame(int layer)
         m_allRowsAvailableTime[layer] = x265_mdate();
         tryWakeOne(); /* ensure one thread is active or help-wanted flag is set prior to blocking */
         static const int block_ms = 250;
-        while (m_completionEvent.timedWait(block_ms))
-            tryWakeOne();
+        if (m_earlyActive)
+        {
+            /* poll: serialize + emit each slice the moment its rows are
+             * entropy-final (see SLICE-STREAMING-DESIGN.md) */
+            /* Slices complete in ARBITRARY order (each slice's first row
+             * has no wavefront dependency on the previous slice), so wait
+             * on each specific slice's flushed-row count and emit in
+             * bitstream order. Acquire ordering: the count must
+             * order-after the workers' substream writes (aarch64 is weakly
+             * ordered; a stale read here poisons rate control via the
+             * emitted byte count -- found as run-to-run divergence). */
+            int emitted = 0;
+            bool complete = false;
+            while (!complete || emitted < (int)m_param->maxSlices)
+            {
+                while (emitted < (int)m_param->maxSlices)
+                {
+                    const int rowsIn = (int)(m_sliceBaseRow[emitted + 1] -
+                                             m_sliceBaseRow[emitted]);
+                    if (__atomic_load_n(&m_sliceRowsFlushed[emitted],
+                            __ATOMIC_ACQUIRE) != rowsIn)
+                        break;
+                    __sync_synchronize();
+                    emitSliceNal((uint32_t)emitted, layer);
+                    emitEarlyChunk((uint32_t)emitted, layer);
+                    emitted++;
+                }
+                if (!complete && !m_completionEvent.timedWait(1))
+                    complete = true;
+                if (!complete)
+                    tryWakeOne();
+            }
+        }
+        else
+        {
+            while (m_completionEvent.timedWait(block_ms))
+                tryWakeOne();
+        }
     }
     else
     {
@@ -1210,37 +1256,11 @@ void FrameEncoder::compressFrame(int layer)
 
     if (m_param->maxSlices > 1)
     {
-        uint32_t nextSliceRow = 0;
-
-        for(uint32_t sliceId = 0; sliceId < m_param->maxSlices; sliceId++)
-        {
-            m_bs.resetBits();
-
-            const uint32_t sliceAddr = nextSliceRow * m_numCols;
-            if (m_param->bOptRefListLengthPPS)
-            {
-                ScopedLock refIdxLock(m_top->m_sliceRefIdxLock);
-                m_top->analyseRefIdx(slice->m_numRefIdx);
-            }
-            m_entropyCoder.codeSliceHeader(*slice, *m_frame[layer]->m_encData, sliceAddr, m_sliceAddrBits, slice->m_sliceQp, layer);
-
-            // Find rows of current slice
-            const uint32_t prevSliceRow = nextSliceRow;
-            while(nextSliceRow < m_numRows && m_rows[nextSliceRow].sliceId == sliceId)
-                nextSliceRow++;
-
-            // serialize each row, record final lengths in slice header
-            uint32_t maxStreamSize = m_nalList.serializeSubstreams(&m_substreamSizes[prevSliceRow], (nextSliceRow - prevSliceRow), &m_outStreams[prevSliceRow]);
-
-            // complete the slice header by writing WPP row-starts
-            m_entropyCoder.setBitstream(&m_bs);
-            if (slice->m_pps->bEntropyCodingSyncEnabled)
-                m_entropyCoder.codeSliceHeaderWPPEntryPoints(&m_substreamSizes[prevSliceRow], (nextSliceRow - prevSliceRow - 1), maxStreamSize);
-            
-            m_bs.writeByteAlignment();
-
-            m_nalList.serialize(slice->m_nalUnitType, m_bs, layer, (!!m_param->bEnableTemporalSubLayers ? m_frame[layer]->m_tempLayer + 1 : (1 + (slice->m_nalUnitType == NAL_UNIT_CODED_SLICE_TSA_N))));
-        }
+        /* early mode: slices were serialized and emitted from the wait loop
+         * as their rows completed (emitSliceNal, byte-identical path) */
+        if (!m_earlyActive)
+            for (uint32_t sliceId = 0; sliceId < m_param->maxSlices; sliceId++)
+                emitSliceNal(sliceId, layer);
     }
     else
     {
@@ -1325,6 +1345,11 @@ void FrameEncoder::compressFrame(int layer)
             m_bs.write(m_frame[layer]->m_rpu.payload[i], 8);
         m_nalList.serialize(NAL_UNIT_UNSPECIFIED, m_bs);
     }
+
+    /* early mode: flush anything appended after the last slice (trailing
+     * SEI variants, filler, RPU) as a final chunk */
+    if (m_earlyActive)
+        emitEarlyChunk(UINT32_MAX, layer);
 
     m_endCompressTime[layer] = x265_mdate();
 
@@ -1450,6 +1475,55 @@ void FrameEncoder::initDecodedPictureHashSEI(int row, int cuAddr, int height, in
             updateChecksum(reconPic->m_picOrg[2], m_seiReconPictureDigest.m_checksum[2], height, width, stride, row, maxCUHeight);
         }
     }
+}
+
+bool FrameEncoder::earlySliceEligible(int layer) const
+{
+    return m_param->bEarlySliceOut && m_param->earlySliceWrite &&
+        m_param->maxSlices > 1 && m_param->bEnableWavefront &&
+        m_param->numLayers == 1 && !layer &&
+        !m_param->bEnableSAO && X265_DEFER_ENTROPY_MODE() == 0 &&
+        !m_param->decodedPictureHashSEI;
+}
+
+/* Serialize one slice's NAL: header, row substreams, WPP entry points.
+ * Exactly the bytes the historic frame-end loop produced; used by both the
+ * frame-end path and the early-emission wait loop (frame thread only). */
+void FrameEncoder::emitSliceNal(uint32_t sliceId, int layer)
+{
+    Slice* slice = m_frame[layer]->m_encData->m_slice;
+    const uint32_t prevSliceRow = m_sliceBaseRow[sliceId];
+    const uint32_t nextSliceRow = m_sliceBaseRow[sliceId + 1];
+
+    m_bs.resetBits();
+    const uint32_t sliceAddr = prevSliceRow * m_numCols;
+    if (m_param->bOptRefListLengthPPS)
+    {
+        ScopedLock refIdxLock(m_top->m_sliceRefIdxLock);
+        m_top->analyseRefIdx(slice->m_numRefIdx);
+    }
+    m_entropyCoder.codeSliceHeader(*slice, *m_frame[layer]->m_encData, sliceAddr, m_sliceAddrBits, slice->m_sliceQp, layer);
+
+    uint32_t maxStreamSize = m_nalList.serializeSubstreams(&m_substreamSizes[prevSliceRow], (nextSliceRow - prevSliceRow), &m_outStreams[prevSliceRow]);
+
+    m_entropyCoder.setBitstream(&m_bs);
+    if (slice->m_pps->bEntropyCodingSyncEnabled)
+        m_entropyCoder.codeSliceHeaderWPPEntryPoints(&m_substreamSizes[prevSliceRow], (nextSliceRow - prevSliceRow - 1), maxStreamSize);
+
+    m_bs.writeByteAlignment();
+
+    m_nalList.serialize(slice->m_nalUnitType, m_bs, layer, (!!m_param->bEnableTemporalSubLayers ? m_frame[layer]->m_tempLayer + 1 : (1 + (slice->m_nalUnitType == NAL_UNIT_CODED_SLICE_TSA_N))));
+}
+
+/* Push every NAL appended since the last chunk through the callback.
+ * Payload pointers are only valid during the call (NALList may realloc). */
+void FrameEncoder::emitEarlyChunk(uint32_t sliceId, int layer)
+{
+    for (uint32_t i = m_earlyNalMark; i < m_nalList.m_numNal; i++)
+        m_param->earlySliceWrite(m_param->earlySliceUser,
+            m_nalList.m_nal[i].payload, m_nalList.m_nal[i].sizeBytes,
+            (uint32_t)m_frame[layer]->m_poc, sliceId);
+    m_earlyNalMark = m_nalList.m_numNal;
 }
 
 void FrameEncoder::encodeSlice(uint32_t sliceAddr, int layer)
@@ -2156,6 +2230,24 @@ void FrameEncoder::processRowEncoder(int intRow, ThreadLocalData& tld, int layer
             enqueueRowFilter(m_row_to_idx[row]);
             tryWakeOne();
         }
+    }
+
+    /* early slice streaming: this tail runs exactly once per fully
+     * completed encode row (aborted passes return above; completed rows are
+     * never reset -- VBV resets only reach rows at or below the trigger).
+     * WPP gates the next row on CTU completion, NOT on this tail, so the
+     * slice's last row can tail before an earlier row's finishSlice flush
+     * has landed; a per-slice countdown of FLUSHED rows closes that race
+     * (found as a 728-byte-short substream on heavy frames). */
+    if (m_earlyActive && !m_rowFlushed[intRow])
+    {
+        /* idempotent per row: resumed calls for an already-completed row
+         * re-run this tail (measured), so a bare counter over-counts */
+        m_rowFlushed[intRow] = 1;
+        const uint32_t rowsInSlice =
+            m_sliceBaseRow[curRow.sliceId + 1] - m_sliceBaseRow[curRow.sliceId];
+        if (ATOMIC_INC(&m_sliceRowsFlushed[curRow.sliceId]) == (int)rowsInSlice)
+            ATOMIC_INC(&m_slicesReady);
     }
 
     curRow.busy = false;

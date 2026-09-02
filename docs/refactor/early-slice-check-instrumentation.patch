@@ -1,0 +1,59 @@
+--- a/source/encoder/frameencoder.cpp	2026-09-02 11:27:28.041689480 +0100
++++ b/source/encoder/frameencoder.cpp	2026-09-02 11:27:27.984702154 +0100
+@@ -40,6 +40,7 @@
+ 
+ namespace X265_NS {
+ 
++static uint32_t s_dbgRowBytes[1024];   /* X265_EARLY_CHECK scratch */
+ 
+ /* Entropy-decoupling probe E1a: runtime switch, one binary for A/B. */
+ static int X265_DEFER_ENTROPY_MODE()
+@@ -1261,6 +1262,17 @@
+         if (!m_earlyActive)
+             for (uint32_t sliceId = 0; sliceId < m_param->maxSlices; sliceId++)
+                 emitSliceNal(sliceId, layer);
++        else if (getenv("X265_EARLY_CHECK"))
++        {
++            for (uint32_t r = 0; r < m_numRows && r < 1024; r++)
++            {
++                uint32_t nowB = m_outStreams[r].getNumberOfWrittenBytes();
++                uint32_t thenB = s_dbgRowBytes[r];
++                if (nowB != thenB)
++                    fprintf(stderr, "EARLYCHK poc %d row %u: early=%u end=%u\n",
++                        m_frame[layer]->m_poc, r, thenB, nowB);
++            }
++        }
+     }
+     else
+     {
+@@ -1495,6 +1507,17 @@
+     const uint32_t prevSliceRow = m_sliceBaseRow[sliceId];
+     const uint32_t nextSliceRow = m_sliceBaseRow[sliceId + 1];
+ 
++    /* X265_EARLY_CHECK: snapshot row substream sizes at early-serialize
++     * time; compared against frame-end state to localize divergence. */
++    if (getenv("X265_EARLY_CHECK"))
++        for (uint32_t r = prevSliceRow; r < nextSliceRow && r < 1024; r++)
++        {
++            s_dbgRowBytes[r] = m_outStreams[r].getNumberOfWrittenBytes();
++            if (!m_rowFlushed[r])
++                fprintf(stderr, "EARLYEMIT poc %d slice %u row %u NOT FLAGGED at emit\n",
++                    m_frame[layer]->m_poc, sliceId, r);
++        }
++
+     m_bs.resetBits();
+     const uint32_t sliceAddr = prevSliceRow * m_numCols;
+     if (m_param->bOptRefListLengthPPS)
+@@ -2246,7 +2269,11 @@
+         m_rowFlushed[intRow] = 1;
+         const uint32_t rowsInSlice =
+             m_sliceBaseRow[curRow.sliceId + 1] - m_sliceBaseRow[curRow.sliceId];
+-        if (ATOMIC_INC(&m_sliceRowsFlushed[curRow.sliceId]) == (int)rowsInSlice)
++        int newCnt = ATOMIC_INC(&m_sliceRowsFlushed[curRow.sliceId]);
++        if (getenv("X265_EARLY_TRACE") && curRow.sliceId == 0)
++            fprintf(stderr, "TRACE poc %d slice0 row %d cnt %d/%u\n",
++                m_frame[layer]->m_poc, intRow, newCnt, rowsInSlice);
++        if (newCnt == (int)rowsInSlice)
+             ATOMIC_INC(&m_slicesReady);
+     }
+ 

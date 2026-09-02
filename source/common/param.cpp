@@ -197,6 +197,9 @@ void x265_param_default(x265_param* param)
     param->bframes = 4;
     param->lookaheadDepth = 20;
     param->asyncLookahead = 0;
+    param->bEarlySliceOut = 0;
+    param->earlySliceWrite = NULL;
+    param->earlySliceUser = NULL;
     param->bFrameAdaptive = X265_B_ADAPT_TRELLIS;
     param->bBPyramid = 1;
     param->scenecutThreshold = 40; /* Magic number pulled in from x264 */
@@ -1081,6 +1084,7 @@ int x265_param_parse(x265_param* p, const char* name, const char* value)
     OPT("min-keyint") p->keyframeMin = atoi(value);
     OPT("rc-lookahead") p->lookaheadDepth = atoi(value);
         OPT("async-lookahead") p->asyncLookahead = atoi(value);
+        OPT("early-slice") p->bEarlySliceOut = atobool(value);
     OPT("bframes") p->bframes = atoi(value);
     OPT("bframe-bias") p->bFrameBias = atoi(value);
     OPT("b-adapt")
@@ -2779,6 +2783,9 @@ void x265_copy_params(x265_param* dst, x265_param* src)
     dst->bBPyramid = src->bBPyramid;
     dst->lookaheadDepth = src->lookaheadDepth;
     dst->asyncLookahead = src->asyncLookahead;
+    dst->bEarlySliceOut = src->bEarlySliceOut;
+    dst->earlySliceWrite = src->earlySliceWrite;
+    dst->earlySliceUser = src->earlySliceUser;
     dst->lookaheadSlices = src->lookaheadSlices;
     dst->lookaheadThreads = src->lookaheadThreads;
     dst->scenecutThreshold = src->scenecutThreshold;

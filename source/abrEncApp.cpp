@@ -29,6 +29,7 @@
 
 #include <signal.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include <queue>
 
@@ -289,6 +290,23 @@ namespace X265_NS {
         * opening an encoder */
 
         if (m_param)
+            /* early slice streaming: NALs leave through this callback the
+             * moment each slice is entropy-final; the normal writeFrame path
+             * is suppressed below. Raw-bitstream output only (pipe use). */
+            if (m_param->bEarlySliceOut)
+            {
+                m_param->earlySliceWrite = [](void*, const uint8_t* bytes,
+                        uint32_t len, uint32_t, uint32_t)
+                {
+                    size_t put = 0;
+                    while (put < len)
+                    {
+                        ssize_t w = write(1, bytes + put, len - put);
+                        if (w < 0) { if (errno == EINTR) continue; exit(1); }
+                        put += (size_t)w;
+                    }
+                };
+            }
             m_encoder = m_cliopt.api->encoder_open(m_param);
         if (!m_encoder)
         {
@@ -883,7 +901,8 @@ ret:
                     }
                     if (nal)
                     {
-                        m_cliopt.totalbytes += m_cliopt.output->writeFrame(p_nal, nal, pic_out[0]);
+                        if (!m_param->bEarlySliceOut)
+                            m_cliopt.totalbytes += m_cliopt.output->writeFrame(p_nal, nal, pic_out[0]);
                         if (pts_queue)
                         {
                             pts_queue->push(-pic_out[0].pts);
@@ -925,7 +944,8 @@ ret:
                 }
                 if (nal)
                 {
-                    m_cliopt.totalbytes += m_cliopt.output->writeFrame(p_nal, nal, pic_out[0]);
+                    if (!m_param->bEarlySliceOut)
+                        m_cliopt.totalbytes += m_cliopt.output->writeFrame(p_nal, nal, pic_out[0]);
                     if (pts_queue)
                     {
                         pts_queue->push(-pic_out[0].pts);

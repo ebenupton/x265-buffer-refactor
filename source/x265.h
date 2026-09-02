@@ -2385,6 +2385,21 @@ typedef struct x265_param
      * on the critical path and the pool idles; on a 4-core Cortex-A76 a value
      * of 2 is worth ~9% with byte-identical output.  Default 0 (off). */
     int       asyncLookahead;
+
+    /* Early slice streaming (fork extension; see
+     * docs/refactor/SLICE-STREAMING-DESIGN.md). With --slices N, emit each
+     * slice's NAL through earlySliceWrite as soon as its rows are
+     * entropy-final instead of at frame end, overlapping transmit/decode
+     * with the remainder of the encode. Bytes passed to the callback are
+     * valid only for the duration of the call. The callback fires on the
+     * frame-encoder thread; non-VCL NALs ride with slice 0 and anything
+     * appended after the last slice arrives as a final chunk with
+     * sliceId == UINT32_MAX. Requires WPP, multiple slices, no SAO, single
+     * layer; silently inactive otherwise. Default off. */
+    int       bEarlySliceOut;
+    void    (*earlySliceWrite)(void* user, const uint8_t* bytes,
+                               uint32_t len, uint32_t poc, uint32_t sliceId);
+    void*     earlySliceUser;
 } x265_param;
 
 /* x265_param_alloc:

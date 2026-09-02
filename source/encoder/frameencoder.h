@@ -206,6 +206,15 @@ public:
     volatile int             *m_vbvResetTriggerRow;
     volatile int             m_sliceCnt;
 
+    /* early slice streaming (SLICE-STREAMING-DESIGN.md): row tails bump
+     * m_slicesReady when a slice's last encode row completes; the frame
+     * thread serializes and emits ready slices from its wait loop. */
+    volatile int             m_slicesReady;
+    volatile int            *m_sliceRowsFlushed; /* rows past finishSlice, per slice */
+    volatile int            *m_rowFlushed;       /* per-row: tail ran (idempotence) */
+    uint32_t                 m_earlyNalMark;   /* NALs already emitted */
+    bool                     m_earlyActive;    /* latched per frame */
+
     uint32_t                 m_numRows;
     uint32_t                 m_numCols;
     uint32_t                 m_filterRowDelay;
@@ -309,6 +318,9 @@ protected:
 
     /* called by compressFrame to generate final per-row bitstreams */
     void encodeSlice(uint32_t sliceAddr, int layer);
+    void emitSliceNal(uint32_t sliceId, int layer);
+    void emitEarlyChunk(uint32_t sliceId, int layer);
+    bool earlySliceEligible(int layer) const;
 
     void threadMain();
     int  collectCTUStatistics(const CUData& ctu, FrameStats* frameLog);
