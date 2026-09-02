@@ -1063,6 +1063,8 @@ void FrameEncoder::compressFrame(int layer)
              * order-after the workers' substream writes (aarch64 is weakly
              * ordered; a stale read here poisons rate control via the
              * emitted byte count -- found as run-to-run divergence). */
+            /* same initial entropy state the frame-end path establishes */
+            m_entropyCoder.load(m_initSliceContext);
             int emitted = 0;
             bool complete = false;
             while (!complete || emitted < (int)m_param->maxSlices)
@@ -1496,6 +1498,13 @@ void FrameEncoder::emitSliceNal(uint32_t sliceId, int layer)
     const uint32_t nextSliceRow = m_sliceBaseRow[sliceId + 1];
 
     m_bs.resetBits();
+    /* Bind the entropy coder to our bitstream before writing the header.
+     * At frame end this was already done by compressFrame, but in early
+     * mode emitSliceNal runs from the wave's wait loop, BEFORE that setup
+     * -- codeSliceHeader then wrote through a stale m_bitIf and segfaulted.
+     * Production only escaped it because its config happened to leave a
+     * valid binding from the previous frame. */
+    m_entropyCoder.setBitstream(&m_bs);
     const uint32_t sliceAddr = prevSliceRow * m_numCols;
     if (m_param->bOptRefListLengthPPS)
     {
