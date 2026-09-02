@@ -28,7 +28,7 @@
 #include "threading.h"
 #include <fstream>
 
-#define QUEUE_SIZE 5
+#define QUEUE_SIZE 1  /* was 5, then 2: a frame parked in this ring is invisible to framedrop and becomes permanent standing latency (~33 ms) */
 
 namespace X265_NS {
 // private x265 namespace
