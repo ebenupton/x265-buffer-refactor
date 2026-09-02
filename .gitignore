@@ -37,3 +37,11 @@ build/
 /.*/
 build-g/
 install-g/
+
+# local build/profile trees (this rig)
+build-pgo*/
+build-prod/
+install-pgobolt/
+pgo-data*/
+pgo-prod/
+*.patch.saved
