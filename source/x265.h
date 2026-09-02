@@ -2396,6 +2396,22 @@ typedef struct x265_param
      * appended after the last slice arrives as a final chunk with
      * sliceId == UINT32_MAX. Requires WPP, multiple slices, no SAO, single
      * layer; silently inactive otherwise. Default off. */
+    /* Progressive input (fork extension; see
+     * docs/refactor/PROGRESSIVE-INPUT-DESIGN.md). Points at a counter the
+     * CALLER updates with the number of source LINES of the current input
+     * picture that are valid. The encoder then pulls rows out of the input
+     * picture as they appear instead of requiring a whole frame up front,
+     * so encoding can start while a camera is still reading the frame out.
+     *
+     * The caller MUST keep x265_picture::planes valid and stable until the
+     * frame has been returned by x265_encoder_encode -- the encoder now
+     * reads them long after the call that submitted them.
+     *
+     * NULL (default) restores the normal whole-picture behaviour exactly.
+     * Only the 8-bit non-scalable path is progressive; anything else
+     * silently falls back to the whole-frame copy. */
+    volatile int* srcLinesReady;
+
     int       bEarlySliceOut;
     void    (*earlySliceWrite)(void* user, const uint8_t* bytes,
                                uint32_t len, uint32_t poc, uint32_t sliceId);

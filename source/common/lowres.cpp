@@ -24,6 +24,7 @@
 
 #include "picyuv.h"
 #include "lowres.h"
+#include "frame.h"
 #include "mv.h"
 
 using namespace X265_NS;
@@ -344,7 +345,7 @@ void Lowres::destroy(x265_param* param)
     }
 }
 // (re) initialize lowres state
-void Lowres::init(PicYuv *origPic, int poc)
+void Lowres::init(PicYuv *origPic, int poc, Frame* owner)
 {
     bLastMiniGopBFrame = false;
     bKeyframe = false; // Not a keyframe unless identified by lookahead
@@ -379,10 +380,33 @@ void Lowres::init(PicYuv *origPic, int poc)
         for (int i = 0; i < X265_LOOKAHEAD_MAX + 1; i++)
             plannedType[i] = X265_TYPE_AUTO;
 
-    /* downscale and generate 4 hpel planes for lookahead */
-    primitives.frameInitLowres(origPic->m_picOrg[0],
-                               lowresPlane[0], lowresPlane[1], lowresPlane[2], lowresPlane[3],
-                               origPic->m_stride, lumaStride, width, lines);
+    /* downscale and generate 4 hpel planes for lookahead.
+     *
+     * Progressive input: do it in row bands, waiting only for the source
+     * rows each band needs, so this does not have to sit behind a complete
+     * frame. frame_init_lowres_core computes lowres row y purely from
+     * source rows 2y, 2y+1 and 2y+2 -- no dependency on previously written
+     * output -- so banding is bit-exact. */
+    if (owner && owner->m_srcPic)
+    {
+        const int BAND = 32;                    /* lowres rows per band */
+        for (int y0 = 0; y0 < lines; y0 += BAND)
+        {
+            int y1 = X265_MIN(y0 + BAND, lines);
+            owner->ensureSrcRows(2 * y1 + 1);   /* row 2*(y1-1)+2 is read */
+            primitives.frameInitLowres(origPic->m_picOrg[0] + (intptr_t)2 * y0 * origPic->m_stride,
+                                       lowresPlane[0] + (intptr_t)y0 * lumaStride,
+                                       lowresPlane[1] + (intptr_t)y0 * lumaStride,
+                                       lowresPlane[2] + (intptr_t)y0 * lumaStride,
+                                       lowresPlane[3] + (intptr_t)y0 * lumaStride,
+                                       origPic->m_stride, lumaStride, width, y1 - y0);
+        }
+        owner->ensureSrcRows(origPic->m_picHeight);   /* rest of the frame */
+    }
+    else
+        primitives.frameInitLowres(origPic->m_picOrg[0],
+                                   lowresPlane[0], lowresPlane[1], lowresPlane[2], lowresPlane[3],
+                                   origPic->m_stride, lumaStride, width, lines);
 
     /* extend hpel planes for motion search */
     extendPicBorder(lowresPlane[0], lumaStride, width, lines, origPic->m_lumaMarginX, origPic->m_lumaMarginY);

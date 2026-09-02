@@ -1725,8 +1725,34 @@ int Encoder::encode(const x265_picture* pic_in, x265_picture* pic_out)
 #endif
             }
 
-            /* Copy input picture into a Frame and PicYuv, send to lookahead */
-            inFrame[layer]->m_fencPic->copyFromPicture(*inputPic[!m_param->format ? (m_param->numScalableLayers > 1) ? 0 : layer : 0], *m_param, m_sps.conformanceWindow.rightOffset, m_sps.conformanceWindow.bottomOffset, !layer);
+            /* Copy input picture into a Frame and PicYuv, send to lookahead.
+             *
+             * Progressive input: skip the up-front whole-frame copy and let
+             * consumers pull rows through Frame::ensureSrcRows() as the
+             * caller publishes them. Falls back to the whole-frame copy if
+             * this picture is not on the supported fast path. */
+            {
+                const x265_picture& srcPic = *inputPic[!m_param->format ? (m_param->numScalableLayers > 1) ? 0 : layer : 0];
+                int padX = m_sps.conformanceWindow.rightOffset;
+                int padY = m_sps.conformanceWindow.bottomOffset;
+                bool progressive = m_param->srcLinesReady && !layer &&
+                                   X265_DEPTH == 8 && srcPic.bitDepth == 8 &&
+                                   m_param->bCopyPicToFrame &&
+                                   m_param->numViews <= 1 &&
+                                   m_param->numScalableLayers <= 1;
+                if (progressive)
+                {
+                    inFrame[layer]->m_srcPic = &srcPic;
+                    inFrame[layer]->m_srcCopied = 0;
+                    inFrame[layer]->m_srcPadX = padX;
+                    inFrame[layer]->m_srcPadY = padY;
+                }
+                else
+                {
+                    inFrame[layer]->m_srcPic = NULL;
+                    inFrame[layer]->m_fencPic->copyFromPicture(srcPic, *m_param, padX, padY, !layer);
+                }
+            }
 
             inFrame[layer]->m_poc = (!layer) ? (++m_pocLast) : m_pocLast;
             inFrame[layer]->m_userData = inputPic[0]->userData;

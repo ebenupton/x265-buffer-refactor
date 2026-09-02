@@ -100,6 +100,19 @@ public:
     int32_t                m_forceqp;            // Force to use the qp specified in qp file
     void*                  m_userData;           // user provided pointer passed in with this picture
 
+    /* Progressive input (x265_param::srcLinesReady). When active the input
+     * picture is NOT copied up front; consumers pull source rows on demand
+     * through ensureSrcRows(), which blocks until the caller has published
+     * them. That is what lets the lookahead and the CTU wave start while
+     * the frame is still arriving. */
+    const x265_picture*    m_srcPic;             // caller's picture, valid until encoded
+    volatile int           m_srcCopied;          // source rows already in m_fencPic
+    Lock                   m_srcLock;
+    int                    m_srcPadX;
+    int                    m_srcPadY;
+
+    void ensureSrcRows(int lines);
+
     Lowres                 m_lowres;
     bool                   m_lowresInit;         // lowres init complete (pre-analysis)
     bool                   m_bChromaExtended;    // orig chroma planes motion extended for weight analysis

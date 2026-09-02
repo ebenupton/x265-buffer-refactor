@@ -1749,6 +1749,15 @@ void FrameEncoder::processRowEncoder(int intRow, ThreadLocalData& tld, int layer
         m_top->m_threadedME->enqueueReadyRows(row, layer, this);
     }
 
+    /* Progressive input: this CTU row reads source lines
+     * [row*maxCUSize, (row+1)*maxCUSize). Wait for them rather than
+     * requiring the whole frame up front. The encoder is slower per line
+     * than a sensor delivers (measured 22.4 us vs 13.4 us on the Pi 5
+     * rig), so once started the wave cannot overtake the incoming data
+     * and this gate costs nothing in steady state. */
+    if (m_frame[layer]->m_srcPic)
+        m_frame[layer]->ensureSrcRows((intRow + 1) * m_param->maxCUSize);
+
     while (curRow.completed < numCols)
     {
         ProfileScopeEvent(encodeCTU);

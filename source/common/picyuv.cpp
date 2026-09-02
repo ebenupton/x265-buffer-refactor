@@ -268,6 +268,107 @@ void PicYuv::destroy()
 
 /* Copy pixels from an x265_picture into internal PicYuv instance.
  * Shift pixels as necessary, mask off bits above X265_DEPTH for safety. */
+/* Progressive input: copy source rows [rowStart, rowEnd) only.
+ *
+ * Mirrors the 8-bit branch of copyFromPicture below, including the
+ * right-edge padding, so that copying a frame in row ranges produces
+ * exactly the same bytes as copying it in one go. Bottom padding and the
+ * plane-level statistics are frame-wide and are done when the last range
+ * lands. Anything outside the supported fast path returns false and the
+ * caller falls back to the whole-frame copy. */
+bool PicYuv::copyRowsFromPicture(const x265_picture& pic, const x265_param& param,
+                                 int padx, int pady, int rowStart, int rowEnd)
+{
+    if (X265_DEPTH != 8 || pic.bitDepth != 8 || !m_param->bCopyPicToFrame ||
+        param.numViews > 1 || param.numScalableLayers > 1)
+        return false;
+
+    int width = m_picWidth - padx;
+    int height = m_picHeight - pady;
+    uint8_t rem = width & 15;
+    padx = rem ? 16 - rem : padx;
+    rem = height & 15;
+    pady = rem ? 16 - rem : pady;
+    padx++;
+    pady++;
+    m_picCsp = pic.colorSpace;
+
+    rowEnd = X265_MIN(rowEnd, height);
+    if (rowStart >= rowEnd)
+        return true;
+
+    /* luma */
+    {
+        pixel *yPixel = m_picOrg[0] + (intptr_t)rowStart * m_stride;
+        uint8_t *yChar = (uint8_t*)pic.planes[0] +
+                         (intptr_t)rowStart * (pic.stride[0] / sizeof(uint8_t));
+        for (int r = rowStart; r < rowEnd; r++)
+        {
+            memcpy(yPixel, yChar, width * sizeof(pixel));
+            for (int x = 0; x < padx; x++)
+                yPixel[width + x] = yPixel[width - 1];
+            yPixel += m_stride;
+            yChar += pic.stride[0] / sizeof(uint8_t);
+        }
+    }
+
+    /* chroma, in the corresponding subsampled row range */
+    if (param.internalCsp != X265_CSP_I400)
+    {
+        int cStart = rowStart >> m_vChromaShift;
+        int cEnd = rowEnd >> m_vChromaShift;
+        int cWidth = width >> m_hChromaShift;
+        int cPadx = padx >> m_hChromaShift;
+        pixel *uPixel = m_picOrg[1] + (intptr_t)cStart * m_strideC;
+        pixel *vPixel = m_picOrg[2] + (intptr_t)cStart * m_strideC;
+        uint8_t *uChar = (uint8_t*)pic.planes[1] +
+                         (intptr_t)cStart * (pic.stride[1] / sizeof(uint8_t));
+        uint8_t *vChar = (uint8_t*)pic.planes[2] +
+                         (intptr_t)cStart * (pic.stride[2] / sizeof(uint8_t));
+        for (int r = cStart; r < cEnd; r++)
+        {
+            memcpy(uPixel, uChar, cWidth * sizeof(pixel));
+            memcpy(vPixel, vChar, cWidth * sizeof(pixel));
+            for (int x = 0; x < cPadx; x++)
+            {
+                uPixel[cWidth + x] = uPixel[cWidth - 1];
+                vPixel[cWidth + x] = vPixel[cWidth - 1];
+            }
+            uPixel += m_strideC;
+            vPixel += m_strideC;
+            uChar += pic.stride[1] / sizeof(uint8_t);
+            vChar += pic.stride[2] / sizeof(uint8_t);
+        }
+    }
+
+    /* frame-wide tail: replicate the bottom rows into the pad area */
+    if (rowEnd >= height)
+    {
+        pixel *Y = m_picOrg[0] + (intptr_t)(height - 1) * m_stride;
+        for (int i = 1; i <= pady; i++)
+            memcpy(Y + i * m_stride, Y, (width + padx) * sizeof(pixel));
+        if (param.internalCsp != X265_CSP_I400)
+        {
+            int cHeight = height >> m_vChromaShift;
+            int cWidth = width >> m_hChromaShift;
+            int cPadx = padx >> m_hChromaShift;
+            int cPady = pady >> m_vChromaShift;
+            /* width expression must match copyFromPicture exactly:
+             * (width + padx) >> shift, NOT (width >> shift) + (padx >> shift),
+             * which differ when both are odd */
+            (void)cWidth; (void)cPadx;
+            pixel *U = m_picOrg[1] + (intptr_t)(cHeight - 1) * m_strideC;
+            pixel *V = m_picOrg[2] + (intptr_t)(cHeight - 1) * m_strideC;
+            for (int j = 1; j <= cPady; j++)
+            {
+                memcpy(U + j * m_strideC, U, ((width + padx) >> m_hChromaShift) * sizeof(pixel));
+                memcpy(V + j * m_strideC, V, ((width + padx) >> m_hChromaShift) * sizeof(pixel));
+            }
+        }
+    }
+    return true;
+}
+
 void PicYuv::copyFromPicture(const x265_picture& pic, const x265_param& param, int padx, int pady, bool isBase)
 {
     /* m_picWidth is the width that is being encoded, padx indicates how many

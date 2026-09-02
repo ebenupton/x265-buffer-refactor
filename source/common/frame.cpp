@@ -31,6 +31,11 @@ using namespace X265_NS;
 
 Frame::Frame()
 {
+    m_srcPic = NULL;
+    m_srcCopied = 0;
+    m_srcPadX = 0;
+    m_srcPadY = 0;
+
     m_bChromaExtended = false;
     m_lowresInit = false;
     m_reconRowFlag = NULL;
@@ -430,4 +435,36 @@ void Frame::destroy()
         X265_FREE_ZERO(m_edgeBitPlane);
         m_edgeBitPic = NULL;
     }
+}
+
+/* Pull source rows out of the caller's picture on demand.
+ *
+ * Blocks until the caller has published at least `lines` source lines
+ * (x265_param::srcLinesReady), then copies any not yet copied. One thread
+ * copies at a time; the others wait on the same lock and find the rows
+ * already there. Rows are copied exactly once and always in order, so the
+ * result is byte-identical to the whole-frame copy -- only the timing of
+ * reading them differs.
+ */
+void Frame::ensureSrcRows(int lines)
+{
+    if (!m_srcPic)
+        return;                         /* not in progressive mode */
+    int height = m_fencPic->m_picHeight;
+    lines = X265_MIN(lines, height);
+    if (m_srcCopied >= lines)
+        return;
+
+    ScopedLock guard(m_srcLock);
+    if (m_srcCopied >= lines)
+        return;
+
+    volatile int* ready = m_param->srcLinesReady;
+    if (ready)
+        while (*ready < lines)
+            GIVE_UP_TIME();
+
+    m_fencPic->copyRowsFromPicture(*m_srcPic, *m_param, m_srcPadX, m_srcPadY,
+                                   m_srcCopied, lines);
+    m_srcCopied = lines;
 }

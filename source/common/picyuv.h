@@ -84,6 +84,14 @@ public:
     int   getLumaBufLen(uint32_t picWidth, uint32_t picHeight, uint32_t picCsp);
 
     void  copyFromPicture(const x265_picture&, const x265_param& param, int padx, int pady, bool isBase = true);
+
+    /* Progressive input: copy just source rows [rowStart, rowEnd) into this
+     * PicYuv, so the encoder can consume a frame that is still arriving.
+     * Returns false if this picture is not on the supported fast path
+     * (8-bit, single view, bCopyPicToFrame), in which case the caller must
+     * use the whole-frame copyFromPicture instead. */
+    bool  copyRowsFromPicture(const x265_picture&, const x265_param& param,
+                              int padx, int pady, int rowStart, int rowEnd);
     void  copyFromFrame(PicYuv* source);
 
     intptr_t getChromaAddrOffset(uint32_t ctuAddr, uint32_t absPartIdx) const { return m_cuOffsetC[ctuAddr] + m_buOffsetC[absPartIdx]; }

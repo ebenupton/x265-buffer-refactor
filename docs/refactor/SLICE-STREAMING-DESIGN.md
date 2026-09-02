@@ -111,3 +111,58 @@ Quality price (slices 4 vs 1, ABR 4M, matched rate): mean -0.074 dB
 (corpus -0.078, bbb+waggle -0.057, worst tractor -0.33) ~ 2% bitrate
 equivalent. Accepted for the latency product; shipped as tx.sh default
 (VP_SLICES=4, early-slice on; VP_EARLY=0 / VP_SLICES=1 to revert).
+
+---
+
+# Progressive input (--srcLinesReady): implemented, and what it does not buy
+
+Companion to the above on the INPUT side: let the encoder consume a frame
+that is still arriving, so encoding can overlap sensor readout.
+
+`x265_param::srcLinesReady` points at a counter the caller updates with the
+number of valid source lines. The input picture is then not copied up front;
+consumers pull rows through `Frame::ensureSrcRows()`, which blocks until the
+caller has published them and copies any not yet copied. Gated points:
+
+| site | how |
+|---|---|
+| ingest | `Encoder::encode` skips `copyFromPicture` and stashes the picture |
+| lowres plane | `Lowres::init` runs `frameInitLowres` in 32-row bands, waiting per band. Safe because the kernel computes lowres row y from source rows 2y, 2y+1, 2y+2 only, with no dependency on previously written output |
+| CTU wave | `processRowEncoder` waits for this row's source lines |
+
+Caller contract: `x265_picture::planes` must stay valid and stable until the
+frame comes back, because the encoder now reads them long after the
+submitting call. Only the 8-bit single-view path is progressive; anything
+else silently falls back to the whole-frame copy, and a NULL pointer
+restores the original behaviour exactly.
+
+## Result: correct, but worth only ~1.4 ms
+
+Measured with `video-pipe/progtest.c`, which feeds lines at the real sensor
+rate (13.4 us/line, 14.6 ms readout) on a quiet machine, 25 frames, x265
+zero-latency path (maxSlices 1, so `encode()` is synchronous -- with
+maxSlices > 1 it returns the PREVIOUS frame and any per-frame latency
+measured is meaningless):
+
+| | frame start -> encoded |
+|---|---|
+| baseline (wait for whole frame) | 40.63 ms |
+| progressive | 39.23 ms |
+
+Bit-identical output on 3/3 repeats, dm-gate PASS with the feature off, and
+`--early-slice` unaffected.
+
+**Why only 1.4 ms of the available 14.6.** The CTU wave cannot start until
+`slicetypeDecide` has run, and that needs this frame's lowres cost estimate
+for rate control -- a whole-frame statistic. So the last lowres band still
+waits for the final source rows, and the wave still begins at readout end.
+Progressive input therefore hides the ingest copy and the lowres work
+(~1.4 ms), not the encode.
+
+**What the rest would cost.** Starting the wave before readout ends requires
+rate control to accept partial-frame statistics -- estimating frame cost from
+the first N% of rows, or reusing the previous frame's estimate. Either
+changes QP decisions, so the output is no longer bit-exact and the change
+must be argued on measured quality rather than proven identical. That is the
+next decision point, and it is a product call: roughly 13 ms in exchange for
+a rate-control approximation.
