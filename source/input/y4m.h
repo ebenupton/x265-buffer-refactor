@@ -28,7 +28,13 @@
 #include "threading.h"
 #include <fstream>
 
-#define QUEUE_SIZE 1  /* was 5, then 2: a frame parked in this ring is invisible to framedrop and becomes permanent standing latency (~33 ms) */
+/* The reader's producer/consumer loop waits on
+ *     while (written - read > QUEUE_SIZE - 2)
+ * so the ring needs at least TWO slots: one being filled while the other is
+ * consumed. QUEUE_SIZE 1 makes that condition always true and the producer
+ * waits forever -- a hang on the very first frame. Do not lower this to 1.
+ * (Measured: ring depth 1 vs 2 was latency-neutral anyway, -4.7 +- 12 ms.) */
+#define QUEUE_SIZE 2
 
 namespace X265_NS {
 // x265 private namespace

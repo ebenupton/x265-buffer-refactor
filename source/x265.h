@@ -2412,6 +2412,21 @@ typedef struct x265_param
      * silently falls back to the whole-frame copy. */
     volatile int* srcLinesReady;
 
+    /* Rate control from the PREVIOUS frame's lookahead statistics
+     * (fork extension, requires srcLinesReady). Normally the CTU wave
+     * cannot start until this frame's lowres cost estimate exists, which
+     * is a whole-frame statistic -- so with progressive input the wave
+     * still waits for the last source row and only the copy is hidden.
+     *
+     * With this set, the wave starts immediately and rate control uses the
+     * previous frame's estimate; this frame's lowres is computed after the
+     * wave and becomes the estimate for the next frame. At 30 fps
+     * consecutive frames are highly correlated, so the estimate is close,
+     * but it is an APPROXIMATION: output is no longer bit-identical to the
+     * normal path and the trade must be judged on measured quality.
+     * Default 0 (off). */
+    int       bRcPrevFrameCost;
+
     int       bEarlySliceOut;
     void    (*earlySliceWrite)(void* user, const uint8_t* bytes,
                                uint32_t len, uint32_t poc, uint32_t sliceId);

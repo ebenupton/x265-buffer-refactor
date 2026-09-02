@@ -154,6 +154,8 @@ static const struct option long_options[] =
     { "rc-lookahead",   required_argument, NULL, 0 },
     { "async-lookahead", required_argument, NULL, 0 },
     { "early-slice",           no_argument, NULL, 0 },
+    { "rc-prev-cost",          no_argument, NULL, 0 },
+    { "no-rc-prev-cost",       no_argument, NULL, 0 },
     { "no-early-slice",        no_argument, NULL, 0 },
     { "lookahead-slices", required_argument, NULL, 0 },
     { "lookahead-threads", required_argument, NULL, 0 },

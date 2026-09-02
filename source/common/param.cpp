@@ -198,6 +198,7 @@ void x265_param_default(x265_param* param)
     param->lookaheadDepth = 20;
     param->asyncLookahead = 0;
     param->srcLinesReady = NULL;
+    param->bRcPrevFrameCost = 0;
     param->bEarlySliceOut = 0;
     param->earlySliceWrite = NULL;
     param->earlySliceUser = NULL;
@@ -1086,6 +1087,7 @@ int x265_param_parse(x265_param* p, const char* name, const char* value)
     OPT("rc-lookahead") p->lookaheadDepth = atoi(value);
         OPT("async-lookahead") p->asyncLookahead = atoi(value);
         OPT("early-slice") p->bEarlySliceOut = atobool(value);
+        OPT("rc-prev-cost") p->bRcPrevFrameCost = atobool(value);
     OPT("bframes") p->bframes = atoi(value);
     OPT("bframe-bias") p->bFrameBias = atoi(value);
     OPT("b-adapt")
@@ -2785,6 +2787,7 @@ void x265_copy_params(x265_param* dst, x265_param* src)
     dst->lookaheadDepth = src->lookaheadDepth;
     dst->asyncLookahead = src->asyncLookahead;
     dst->srcLinesReady = src->srcLinesReady;
+    dst->bRcPrevFrameCost = src->bRcPrevFrameCost;
     dst->bEarlySliceOut = src->bEarlySliceOut;
     dst->earlySliceWrite = src->earlySliceWrite;
     dst->earlySliceUser = src->earlySliceUser;

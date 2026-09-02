@@ -32,6 +32,7 @@
 #include "mv.h"
 
 #include "slicetype.h"
+#include "encoder.h"
 #include "motion.h"
 #include "ratecontrol.h"
 
@@ -979,6 +980,7 @@ void LookaheadTLD::weightsAnalyse(Lowres& fenc, Lowres& ref)
 
 Lookahead::Lookahead(x265_param *param, ThreadPool* pool)
 {
+    m_encoder = NULL;
     m_param = param;
     m_pool  = pool;
 
@@ -1416,10 +1418,27 @@ void Lookahead::getEstimatedPictureCost(Frame *curFrame)
             else
                 curFrame->m_lowres.satdCost = curFrame->m_lowres.costEst[b - p0][p1 - b];
         }
+        /* bRcPrevFrameCost: hand rate control the PREVIOUS frame's estimate
+         * instead of this one's. The real estimate for this frame is still
+         * computed above and is stored here for the next frame to use, so
+         * the statistic is exactly the normal one, just one frame stale.
+         *
+         * This is the rate-control approximation that would let the CTU
+         * wave start before the frame has finished arriving. Measuring its
+         * quality cost first is the point: if a one-frame-stale estimate is
+         * expensive, the latency restructure that depends on it is not
+         * worth building. */
+        if (curFrame->m_param->bRcPrevFrameCost)
+        {
+            curFrame->m_lowres.lowresCostForRc = curFrame->m_lowres.lowresCosts[b - p0][p1 - b];
+            m_encoder->swapPrevFrameCost(curFrame);
+        }
+
         if (curFrame->m_param->rc.vbvBufferSize && curFrame->m_param->rc.vbvMaxBitrate)
         {
             /* aggregate lowres row satds to CTU resolution */
-            curFrame->m_lowres.lowresCostForRc = curFrame->m_lowres.lowresCosts[b - p0][p1 - b];
+            if (!curFrame->m_param->bRcPrevFrameCost)
+                curFrame->m_lowres.lowresCostForRc = curFrame->m_lowres.lowresCosts[b - p0][p1 - b];
             uint32_t lowresRow = 0, lowresCol = 0, lowresCuIdx = 0, sum = 0, intraSum = 0;
             uint32_t scale = curFrame->m_param->maxCUSize / (2 * X265_LOWRES_CU_SIZE);
             uint32_t numCuInHeight = (curFrame->m_param->sourceHeight + curFrame->m_param->maxCUSize - 1) / curFrame->m_param->maxCUSize;

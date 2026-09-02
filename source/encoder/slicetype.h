@@ -163,6 +163,7 @@ public:
     Event         m_outputSignal;
     LookaheadTLD* m_tld;
     x265_param*   m_param;
+    class Encoder* m_encoder;    /* for bRcPrevFrameCost cost store */
     Lowres*       m_lastNonB;
     int*          m_scratch;         // temp buffer for cutree propagate
 

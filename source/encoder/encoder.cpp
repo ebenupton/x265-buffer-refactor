@@ -122,6 +122,10 @@ using namespace X265_NS;
 
 Encoder::Encoder()
 {
+    m_prevSatdCost = 0;
+    m_prevLowresCostForRc = NULL;
+    m_prevCostBlocks = 0;
+
     m_aborted = false;
     m_reconfigure = false;
     m_reconfigureRc = false;
@@ -385,6 +389,7 @@ void Encoder::create()
     else
         lookAheadThreadPool = (!m_param->bThreadedME) ? m_threadPool : &m_threadPool[1];
     m_lookahead = new Lookahead(m_param, lookAheadThreadPool);
+    m_lookahead->m_encoder = this;
     if (pools)
     {
         m_lookahead->m_jpId = lookAheadThreadPool[0].m_numProviders++;
@@ -914,8 +919,57 @@ int Encoder::setAnalysisData(x265_analysis_data *analysis_data, int poc, uint32_
     return -1;
 }
 
+/* bRcPrevFrameCost: exchange this frame's freshly computed lookahead cost
+ * statistics for the previous frame's. The frame then encodes against a
+ * one-frame-stale estimate, and its own (correct) statistics become the
+ * estimate for the next frame. On the first frame there is nothing stored,
+ * so the frame keeps its own and only the store is primed. */
+void Encoder::swapPrevFrameCost(Frame* frame)
+{
+    Lowres& lr = frame->m_lowres;
+    uint32_t blocks = lr.maxBlocksInRow * lr.maxBlocksInCol;
+    if (!lr.lowresCostForRc || !blocks)
+        return;
+
+    ScopedLock guard(m_prevCostLock);
+    if (blocks != m_prevCostBlocks)
+    {
+        X265_FREE(m_prevLowresCostForRc);
+        m_prevLowresCostForRc = X265_MALLOC(uint16_t, blocks);
+        m_prevCostBlocks = m_prevLowresCostForRc ? blocks : 0;
+        m_prevSatdCost = 0;
+    }
+    if (!m_prevCostBlocks)
+        return;
+
+    bool haveStored = m_prevSatdCost != 0;
+    /* keep this frame's real statistics for the next frame */
+    static uint16_t* scratch = NULL;
+    static uint32_t scratchBlocks = 0;
+    if (scratchBlocks != blocks)
+    {
+        X265_FREE(scratch);
+        scratch = X265_MALLOC(uint16_t, blocks);
+        scratchBlocks = scratch ? blocks : 0;
+    }
+    if (!scratchBlocks)
+        return;
+    memcpy(scratch, lr.lowresCostForRc, blocks * sizeof(uint16_t));
+    int64_t thisSatd = lr.satdCost;
+
+    if (haveStored)
+    {
+        memcpy(lr.lowresCostForRc, m_prevLowresCostForRc, blocks * sizeof(uint16_t));
+        lr.satdCost = m_prevSatdCost;
+    }
+    memcpy(m_prevLowresCostForRc, scratch, blocks * sizeof(uint16_t));
+    m_prevSatdCost = thisSatd;
+}
+
 void Encoder::destroy()
 {
+    X265_FREE(m_prevLowresCostForRc); m_prevLowresCostForRc = NULL;
+
 #if ENABLE_HDR10_PLUS
     if (m_bToneMap)
         m_hdr10plus_api->hdr10plus_clear_movie(m_cim, m_numCimInfo);

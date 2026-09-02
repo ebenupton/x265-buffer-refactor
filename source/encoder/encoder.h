@@ -216,6 +216,17 @@ public:
     x265_param*        m_zoneParam;
     RateControl*       m_rateControl;
     Lookahead*         m_lookahead;
+
+    /* bRcPrevFrameCost: the previous frame's lookahead cost statistics,
+     * used as this frame's rate-control estimate so the CTU wave need not
+     * wait for a whole-frame lowres pass. Guarded by m_prevCostLock; the
+     * frame encoder refreshes it after its wave completes. */
+    Lock               m_prevCostLock;
+    int64_t            m_prevSatdCost;      /* 0 = nothing stored yet */
+    uint16_t*          m_prevLowresCostForRc;
+    uint32_t           m_prevCostBlocks;
+
+    void swapPrevFrameCost(Frame* frame);
     ThreadedME*        m_threadedME;
     AdaptiveFrameDuplication* m_dupBuffer[DUP_BUFFER];      // picture buffer of size 2
     /*Frame duplication: Two pictures used to compute PSNR */
